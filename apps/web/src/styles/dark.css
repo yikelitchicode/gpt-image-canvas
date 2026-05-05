@@ -462,6 +462,12 @@
   color: #fff7ed;
 }
 
+.app-root[data-canvas-theme="dark"] .segmented-control.is-active:hover {
+  border-color: #d47b4f;
+  background-color: #923b1f;
+  color: #fff7ed;
+}
+
 .app-root[data-canvas-theme="dark"] .prompt-chip {
   border-color: rgb(198 95 50 / 0.36);
   background: rgb(126 50 26 / 0.22);

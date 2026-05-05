@@ -55,6 +55,13 @@
   box-shadow: 0 10px 20px rgb(126 50 26 / 0.18);
 }
 
+.segmented-control.is-active:hover {
+  border-color: #682714;
+  background-color: #682714;
+  color: #fffdf8;
+  box-shadow: 0 12px 24px rgb(126 50 26 / 0.22);
+}
+
 .prompt-chip {
   border-color: #ead1bc;
   background: #fff5e8;
