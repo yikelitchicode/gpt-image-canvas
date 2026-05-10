@@ -2,7 +2,7 @@
 
 Generated documentation for the SQLite schema defined in `apps/api/src/infrastructure/schema.ts`.
 
-Last reviewed: 2026-05-05.
+Last reviewed: 2026-05-09.
 
 ## `projects`
 
@@ -91,6 +91,19 @@ Stores Agent planning model configuration.
 | `supports_vision` | integer | Required boolean flag stored as integer. |
 | `created_at` | text | Required ISO timestamp. |
 | `updated_at` | text | Required ISO timestamp. |
+
+## `agent_conversations`
+
+Stores local Agent conversation history and resumable context snapshots.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | text | Primary key. |
+| `title` | text | Required conversation title shown in history. |
+| `messages_json` | text | Required serialized Agent transcript. |
+| `context_json` | text | Required serialized resumable Agent context. |
+| `created_at` | text | Required ISO timestamp. |
+| `updated_at` | text | Required ISO timestamp; indexed for latest-first history. |
 
 ## `codex_oauth_tokens`
 

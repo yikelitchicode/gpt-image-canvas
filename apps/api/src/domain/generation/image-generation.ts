@@ -287,7 +287,7 @@ function persistedReferenceAssetIdCandidates(assetId: string): string[] {
   return candidates.filter((candidate, index, values) => candidate && values.indexOf(candidate) === index);
 }
 
-async function saveReferenceImageInput(input: ReferenceImageInput): Promise<GeneratedAsset> {
+export async function saveReferenceImageInput(input: ReferenceImageInput): Promise<GeneratedAsset> {
   const parsed = referenceDataUrlToBytes(input);
   const imageSize = await readImageSize(parsed.bytes);
   if (!imageSize) {

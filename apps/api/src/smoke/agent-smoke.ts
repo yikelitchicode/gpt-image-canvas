@@ -14,12 +14,14 @@ mkdirSync(dataDir, { recursive: true });
 
 async function main(): Promise<void> {
   try {
-    const [{ app, agentWebSocketServer }, { closeDatabase }, agentSession] = await Promise.all([
+    const [{ app, agentWebSocketServer }, { closeDatabase }, agentSession, agentConversationStore] = await Promise.all([
       import("../index.js"),
       import("../infrastructure/database.js"),
-      import("../domain/agent/websocket-session.js")
+      import("../domain/agent/websocket-session.js"),
+      import("../domain/agent/conversation-store.js")
     ]);
     const { closeAllAgentSessions, resolveImplicitAgentContextReferences } = agentSession;
+    const { getAgentConversationContext, saveAgentConversationContext } = agentConversationStore;
 
     let server: ReturnType<typeof serve> | undefined;
     const port = await new Promise<number>((resolvePort) => {
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
     try {
       smokeImplicitContextResolution(resolveImplicitAgentContextReferences);
       await smokeAgentWebSocket(port);
+      await smokeAgentConversations(app, port, { getAgentConversationContext, saveAgentConversationContext });
       await smokeAgentConfig(app);
     } finally {
       closeAllAgentSessions("agent_smoke_shutdown");
@@ -168,6 +171,117 @@ function smokeImplicitContextResolution(
   });
   expect(freshRequest.ok, "fresh generation request does not fail implicit context");
   expect(freshRequest.resolvedOutputs.length === 0, "fresh generation request does not attach previous outputs");
+}
+
+async function smokeAgentConversations(
+  app: RequestApp,
+  port: number,
+  store: {
+    getAgentConversationContext: typeof import("../domain/agent/conversation-store.js").getAgentConversationContext;
+    saveAgentConversationContext: typeof import("../domain/agent/conversation-store.js").saveAgentConversationContext;
+  }
+): Promise<void> {
+  const timestamp = new Date().toISOString();
+  const save = await requestJson(app, "/api/agent-conversations/agent-conversation-smoke", {
+    method: "PUT",
+    body: {
+      title: "Saved Agent smoke",
+      messages: [
+        {
+          id: "agent-message-smoke-user",
+          role: "user",
+          content: "Generate a poster",
+          timestamp,
+          plan: {
+            id: "data-url-probe",
+            dataUrl: "data:image/png;base64,AAAA"
+          }
+        },
+        {
+          id: "agent-message-smoke-assistant",
+          role: "assistant",
+          content: "Plan ready",
+          timestamp,
+          previews: [
+            {
+              id: "preview-smoke",
+              assetId: "asset-smoke",
+              jobId: "job-smoke",
+              outputId: "output-smoke",
+              url: "/api/assets/asset-smoke/preview?width=256"
+            }
+          ]
+        }
+      ]
+    }
+  });
+  expect(save.response.status === 200, "Agent conversation save returns 200");
+  expect(isRecord(save.body.conversation), "Agent conversation save returns conversation");
+  expect(!JSON.stringify(save.body).includes("data:image"), "Agent conversation save strips dataUrl");
+
+  const list = await requestJson(app, "/api/agent-conversations");
+  expect(list.response.status === 200, "Agent conversation list returns 200");
+  expect(Array.isArray(list.body.conversations), "Agent conversation list includes conversations");
+  expect(
+    list.body.conversations.some((conversation) => isRecord(conversation) && conversation.id === "agent-conversation-smoke"),
+    "Agent conversation list includes saved conversation"
+  );
+
+  const detail = await requestJson(app, "/api/agent-conversations/agent-conversation-smoke");
+  expect(detail.response.status === 200, "Agent conversation detail returns 200");
+  expect(detail.body.id === "agent-conversation-smoke", "Agent conversation detail returns requested id");
+  expect(Array.isArray(detail.body.messages), "Agent conversation detail includes messages");
+  expect(!JSON.stringify(detail.body).includes("data:image"), "Agent conversation detail does not expose dataUrl");
+
+  store.saveAgentConversationContext("agent-conversation-context-smoke", {
+    previousUserText: "Make the previous image warmer.",
+    previousPlan: {
+      schemaVersion: 1,
+      id: "context-plan-smoke",
+      title: "Context plan smoke",
+      status: "awaiting_confirmation",
+      defaults: {
+        size: {
+          width: 1024,
+          height: 1024
+        },
+        quality: "auto",
+        outputFormat: "png"
+      },
+      jobs: [],
+      edges: [],
+      createdBy: "agent",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      dataUrl: "data:image/png;base64,BBBB"
+    },
+    previousOutputs: [
+      {
+        index: 1,
+        assetId: "asset-output-1",
+        label: "output-1.png",
+        width: 1024,
+        height: 1024,
+        mimeType: "image/png"
+      }
+    ]
+  } as Parameters<typeof store.saveAgentConversationContext>[1]);
+  const context = store.getAgentConversationContext("agent-conversation-context-smoke");
+  expect(context?.previousUserText === "Make the previous image warmer.", "Agent conversation context readback keeps user text");
+  expect(context.previousOutputs[0]?.assetId === "asset-output-1", "Agent conversation context readback keeps output reference");
+  expect(!JSON.stringify(context).includes("data:image"), "Agent conversation context strips dataUrl");
+
+  const probe = await openWebSocketProbe(
+    `ws://127.0.0.1:${port}/api/agent/ws?conversationId=${encodeURIComponent("agent-conversation-context-smoke")}`
+  );
+  try {
+    const connected = await probe.next();
+    expectEventType(connected, "connected");
+    expect(connected.conversationId === "agent-conversation-context-smoke", "WebSocket connected event includes conversationId");
+    expect(connected.restoredContext === true, "WebSocket restores Agent conversation context");
+  } finally {
+    probe.close();
+  }
 }
 
 interface RequestApp {

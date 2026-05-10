@@ -69,6 +69,15 @@ export const agentLlmConfigs = sqliteTable("agent_llm_configs", {
   updatedAt: text("updated_at").notNull()
 });
 
+export const agentConversations = sqliteTable("agent_conversations", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  messagesJson: text("messages_json").notNull(),
+  contextJson: text("context_json").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
 export const codexOAuthTokens = sqliteTable("codex_oauth_tokens", {
   id: text("id").primaryKey(),
   accessToken: text("access_token"),

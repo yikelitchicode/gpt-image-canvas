@@ -5,7 +5,7 @@ import { createAgentWebSocketEvents } from "../../domain/agent/websocket-session
 export function registerAgentWebSocketRoutes(app: Hono): void {
   app.get(
     "/api/agent/ws",
-    upgradeWebSocket((c) => createAgentWebSocketEvents(c.req.query("connectionId"), c.req.query("runId")), {
+    upgradeWebSocket((c) => createAgentWebSocketEvents(c.req.query("connectionId"), c.req.query("runId"), c.req.query("conversationId")), {
       onError(error) {
         console.error("Agent WebSocket error.", error);
       }

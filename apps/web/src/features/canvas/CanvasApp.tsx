@@ -10,6 +10,7 @@ import {
   Copy,
   Download,
   ExternalLink,
+  History,
   ImageIcon,
   KeyRound,
   Loader2,
@@ -81,6 +82,10 @@ import {
   STYLE_PRESETS,
   resolutionTierForSize,
   validateImageSize,
+  type AgentConversation,
+  type AgentConversationListResponse,
+  type AgentConversationMessage,
+  type AgentConversationSummary,
   type AgentLlmConfigView,
   type AgentPlannerOptions,
   type AgentReasoningEffort,
@@ -125,6 +130,7 @@ const AGENT_SOCKET_PING_INTERVAL_MS = 15_000;
 const AGENT_SOCKET_RECONNECT_INITIAL_MS = 500;
 const AGENT_SOCKET_RECONNECT_MAX_MS = 10_000;
 const AGENT_SOCKET_RECONNECT_WINDOW_MS = 2 * 60 * 60 * 1000;
+const AGENT_HISTORY_SAVE_DEBOUNCE_MS = 600;
 const HISTORY_COLLAPSED_LIMIT = 3;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
@@ -335,6 +341,76 @@ interface AgentChatMessage {
   runId?: string;
   plan?: unknown;
   previews?: AgentChatAssetPreview[];
+}
+
+const agentChatMessageRoles = new Set<AgentChatMessageRole>(["user", "assistant", "thinking", "system", "error", "question", "plan"]);
+
+function isAgentChatMessageRole(value: unknown): value is AgentChatMessageRole {
+  return typeof value === "string" && agentChatMessageRoles.has(value as AgentChatMessageRole);
+}
+
+function createAgentConversationId(): string {
+  return `agent-conversation-${crypto.randomUUID()}`;
+}
+
+function agentConversationTitle(messages: AgentChatMessage[]): string | undefined {
+  const firstUserMessage = messages.find((message) => message.role === "user" && message.content.trim());
+  const title = firstUserMessage?.content.trim().replace(/\s+/gu, " ");
+  if (!title) {
+    return undefined;
+  }
+
+  return title.length > 120 ? `${title.slice(0, 119)}...` : title;
+}
+
+function conversationMessagesFromAgentChat(messages: AgentChatMessage[]): AgentConversationMessage[] {
+  return messages.map((message) => ({
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    details: message.details,
+    timestamp: message.timestamp,
+    runId: message.runId,
+    plan: message.plan,
+    previews: message.previews?.map((preview) => ({
+      id: preview.id,
+      assetId: preview.assetId,
+      jobId: preview.jobId,
+      outputId: preview.outputId,
+      planId: preview.planId,
+      shapeId: preview.shapeId,
+      url: preview.url
+    }))
+  }));
+}
+
+function agentChatMessagesFromConversation(messages: AgentConversationMessage[]): AgentChatMessage[] {
+  return messages.flatMap((message) => {
+    if (!isAgentChatMessageRole(message.role)) {
+      return [];
+    }
+
+    return [
+      {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        details: message.details,
+        timestamp: message.timestamp,
+        runId: message.runId,
+        plan: message.plan,
+        previews: message.previews?.map((preview) => ({
+          id: preview.id,
+          assetId: preview.assetId,
+          jobId: preview.jobId,
+          outputId: preview.outputId,
+          planId: preview.planId,
+          shapeId: preview.shapeId as TLShapeId | undefined,
+          url: preview.url
+        }))
+      }
+    ];
+  });
 }
 
 interface GenerationSubmitInput {
@@ -1887,7 +1963,7 @@ async function readStoredReferenceImage(assetId: string, signal: AbortSignal, t:
   };
 }
 
-function agentWebSocketUrl(connectionId?: string | null, runId?: string | null): string {
+function agentWebSocketUrl(connectionId?: string | null, runId?: string | null, conversationId?: string | null): string {
   const url = new URL("/api/agent/ws", window.location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   if (connectionId) {
@@ -1895,6 +1971,9 @@ function agentWebSocketUrl(connectionId?: string | null, runId?: string | null):
   }
   if (runId) {
     url.searchParams.set("runId", runId);
+  }
+  if (conversationId) {
+    url.searchParams.set("conversationId", conversationId);
   }
   return url.toString();
 }
@@ -2034,12 +2113,14 @@ function AgentPlanCard({
   isAgentRunning,
   onAction,
   plan,
+  readOnly = false,
   t
 }: {
   isAgentConfigured: boolean;
   isAgentRunning: boolean;
   onAction: (plan: GenerationPlan, action: AgentPlanAction) => void;
   plan: unknown;
+  readOnly?: boolean;
   t: Translate;
 }) {
   if (!isGenerationPlan(plan)) {
@@ -2078,7 +2159,7 @@ function AgentPlanCard({
       {showConfirmationHint ? <span className="agent-plan-card__hint">{t("agentPlanConfirmationHint")}</span> : null}
       <AgentPlanReviewNodes plan={plan} t={t} />
       <AgentPlanJobDetails plan={plan} t={t} />
-      <div className="agent-plan-card__actions">
+      {readOnly ? null : <div className="agent-plan-card__actions">
         <button
           className="agent-plan-card__action agent-plan-card__action--primary"
           disabled={!canExecute}
@@ -2110,7 +2191,199 @@ function AgentPlanCard({
             {t("agentPlanCancel")}
           </button>
         ) : null}
+      </div>}
+    </article>
+  );
+}
+
+function AgentHistoryDialog({
+  conversation,
+  error,
+  formatDateTime,
+  isDetailLoading,
+  isLoading,
+  isRestoringDisabled,
+  onClose,
+  onRestore,
+  onSelectConversation,
+  selectedConversationId,
+  summaries,
+  t
+}: {
+  conversation: AgentConversation | null;
+  error: string;
+  formatDateTime: (value: string, options?: Intl.DateTimeFormatOptions) => string;
+  isDetailLoading: boolean;
+  isLoading: boolean;
+  isRestoringDisabled: boolean;
+  onClose: () => void;
+  onRestore: (conversation: AgentConversation) => void;
+  onSelectConversation: (conversationId: string) => void;
+  selectedConversationId: string | null;
+  summaries: AgentConversationSummary[];
+  t: Translate;
+}) {
+  return (
+    <div className="agent-history-backdrop app-modal-backdrop" data-testid="agent-history-dialog" role="presentation" onClick={onClose}>
+      <section
+        aria-labelledby="agent-history-title"
+        aria-modal="true"
+        className="agent-history-dialog app-modal-surface"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="agent-history-dialog__header">
+          <div className="agent-history-dialog__title">
+            <span className="agent-history-dialog__mark" aria-hidden="true">
+              <History className="size-4" />
+            </span>
+            <div>
+              <h2 id="agent-history-title">{t("agentHistoryTitle")}</h2>
+              <p>{t("agentHistorySubtitle")}</p>
+            </div>
+          </div>
+          <button aria-label={t("commonClose")} className="history-icon-action" type="button" onClick={onClose}>
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </header>
+
+        {error ? (
+          <p className="agent-history-dialog__alert" role="alert">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="agent-history-dialog__body">
+          <aside className="agent-history-list" aria-label={t("agentHistoryListLabel")}>
+            {isLoading ? (
+              <div className="agent-history-empty" role="status">
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                <span>{t("agentHistoryLoading")}</span>
+              </div>
+            ) : summaries.length === 0 ? (
+              <div className="agent-history-empty">
+                <MessageCirclePlus className="size-5" aria-hidden="true" />
+                <strong>{t("agentHistoryEmptyTitle")}</strong>
+                <span>{t("agentHistoryEmptyCopy")}</span>
+              </div>
+            ) : (
+              summaries.map((summary) => (
+                <button
+                  aria-pressed={summary.id === selectedConversationId}
+                  className="agent-history-list__item"
+                  data-selected={summary.id === selectedConversationId}
+                  key={summary.id}
+                  type="button"
+                  onClick={() => onSelectConversation(summary.id)}
+                >
+                  <span className="agent-history-list__item-title">{summary.title}</span>
+                  <span className="agent-history-list__item-preview">{summary.lastMessagePreview ?? t("agentHistoryNoPreview")}</span>
+                  <span className="agent-history-list__item-meta">
+                    {t("agentHistoryMessageCount", { count: summary.messageCount })}
+                    <time dateTime={summary.updatedAt}>{formatDateTime(summary.updatedAt, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
+                  </span>
+                </button>
+              ))
+            )}
+          </aside>
+
+          <section className="agent-history-detail" aria-label={t("agentHistoryDetailLabel")}>
+            {isDetailLoading ? (
+              <div className="agent-history-empty" role="status">
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                <span>{t("agentHistoryDetailLoading")}</span>
+              </div>
+            ) : conversation ? (
+              <>
+                <div className="agent-history-detail__head">
+                  <div>
+                    <h3>{conversation.title}</h3>
+                    <p>
+                      <time dateTime={conversation.updatedAt}>
+                        {formatDateTime(conversation.updatedAt, { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                      </time>
+                      <span>{t("agentHistoryMessageCount", { count: conversation.messages.length })}</span>
+                    </p>
+                  </div>
+                  <button
+                    className="agent-history-restore"
+                    disabled={isRestoringDisabled}
+                    type="button"
+                    onClick={() => onRestore(conversation)}
+                  >
+                    <RotateCcw className="size-4" aria-hidden="true" />
+                    {t("agentHistoryRestore")}
+                  </button>
+                </div>
+                <div className="agent-history-transcript">
+                  {conversation.messages.map((message) => (
+                    <AgentHistoryMessage
+                      formatDateTime={formatDateTime}
+                      key={message.id}
+                      message={message}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="agent-history-empty">
+                <History className="size-5" aria-hidden="true" />
+                <strong>{t("agentHistorySelectTitle")}</strong>
+                <span>{t("agentHistorySelectCopy")}</span>
+              </div>
+            )}
+          </section>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AgentHistoryMessage({
+  formatDateTime,
+  message,
+  t
+}: {
+  formatDateTime: (value: string, options?: Intl.DateTimeFormatOptions) => string;
+  message: AgentConversationMessage;
+  t: Translate;
+}) {
+  const previewCount = message.previews?.length ?? 0;
+
+  return (
+    <article className={`agent-message agent-message--${message.role}`} data-message-role={message.role}>
+      <div className={message.role === "system" || message.role === "error" ? "agent-status-line__meta" : "agent-message__meta"}>
+        <span>{t("agentMessageRole", { role: message.role })}</span>
+        <time dateTime={message.timestamp}>{formatDateTime(message.timestamp, { hour: "2-digit", minute: "2-digit" })}</time>
       </div>
+      <p className="agent-message__content">{message.content}</p>
+      {message.role === "thinking" && message.details ? (
+        <details className="agent-thinking-details">
+          <summary className="agent-thinking-details__toggle">{t("agentHistoryThinkingDetails")}</summary>
+          <pre className="agent-thinking-details__content">{message.details}</pre>
+        </details>
+      ) : null}
+      {message.plan ? (
+        <AgentPlanCard
+          isAgentConfigured={false}
+          isAgentRunning={false}
+          plan={message.plan}
+          readOnly
+          t={t}
+          onAction={() => undefined}
+        />
+      ) : null}
+      {previewCount > 0 && message.previews ? (
+        <div className="agent-preview-list">
+          {message.previews.map((preview) => (
+            <figure className="agent-history-preview" key={preview.id}>
+              <img alt="" src={preview.url} />
+              <figcaption>{preview.jobId}</figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -2626,6 +2899,14 @@ export function App() {
   const [isAgentConfigLoading, setIsAgentConfigLoading] = useState(true);
   const [agentConfigError, setAgentConfigError] = useState("");
   const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>([]);
+  const [currentAgentConversationId, setCurrentAgentConversationId] = useState<string | null>(null);
+  const [isAgentHistoryOpen, setIsAgentHistoryOpen] = useState(false);
+  const [agentHistorySummaries, setAgentHistorySummaries] = useState<AgentConversationSummary[]>([]);
+  const [selectedAgentHistoryId, setSelectedAgentHistoryId] = useState<string | null>(null);
+  const [selectedAgentConversation, setSelectedAgentConversation] = useState<AgentConversation | null>(null);
+  const [isAgentHistoryLoading, setIsAgentHistoryLoading] = useState(false);
+  const [isAgentHistoryDetailLoading, setIsAgentHistoryDetailLoading] = useState(false);
+  const [agentHistoryError, setAgentHistoryError] = useState("");
   const [copiedAgentMessageId, setCopiedAgentMessageId] = useState<string | null>(null);
   const [expandedThinkingMessageIds, setExpandedThinkingMessageIds] = useState<string[]>([]);
   const [agentRunStatus, setAgentRunStatus] = useState<AgentRunStatus>("idle");
@@ -2648,6 +2929,10 @@ export function App() {
   const agentSocketReconnectDelayRef = useRef(AGENT_SOCKET_RECONNECT_INITIAL_MS);
   const agentConnectionIdRef = useRef<string | null>(null);
   const activeAgentRunIdRef = useRef<string | null>(null);
+  const currentAgentConversationIdRef = useRef<string | null>(null);
+  currentAgentConversationIdRef.current = currentAgentConversationId;
+  const agentHistorySaveTimerRef = useRef<number | undefined>();
+  const agentHistorySaveRequestRef = useRef(0);
   const agentTranscriptRef = useRef<HTMLElement | null>(null);
   const agentOutputPlacementCountsRef = useRef<Map<string, number>>(new Map());
   const agentJobPlaceholdersRef = useRef<Map<string, AgentJobPlaceholderSet>>(new Map());
@@ -2919,6 +3204,8 @@ export function App() {
       activeAgentRunIdRef.current = null;
       agentJobPlaceholdersRef.current.clear();
       agentOutputPlacementCountsRef.current.clear();
+      window.clearTimeout(agentHistorySaveTimerRef.current);
+      agentHistorySaveTimerRef.current = undefined;
       window.clearTimeout(agentCopyResetTimerRef.current);
       window.clearTimeout(codexPollTimerRef.current);
     };
@@ -2996,6 +3283,23 @@ export function App() {
 
     transcript.scrollTop = transcript.scrollHeight;
   }, [agentMessages]);
+
+  useEffect(() => {
+    if (!currentAgentConversationId || agentMessages.length === 0) {
+      return;
+    }
+
+    window.clearTimeout(agentHistorySaveTimerRef.current);
+    agentHistorySaveTimerRef.current = window.setTimeout(() => {
+      agentHistorySaveTimerRef.current = undefined;
+      void saveAgentConversationNow(currentAgentConversationId, agentMessages);
+    }, AGENT_HISTORY_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(agentHistorySaveTimerRef.current);
+      agentHistorySaveTimerRef.current = undefined;
+    };
+  }, [agentMessages, currentAgentConversationId]);
 
   useEffect(() => {
     if (isAuthLoading || !authStatus || route === "gallery") {
@@ -4012,6 +4316,169 @@ export function App() {
     }
   }
 
+  function ensureCurrentAgentConversationId(): string {
+    const existingId = currentAgentConversationIdRef.current;
+    if (existingId) {
+      return existingId;
+    }
+
+    const conversationId = createAgentConversationId();
+    currentAgentConversationIdRef.current = conversationId;
+    setCurrentAgentConversationId(conversationId);
+    return conversationId;
+  }
+
+  async function saveAgentConversationNow(conversationId: string, messages: AgentChatMessage[]): Promise<void> {
+    if (messages.length === 0) {
+      return;
+    }
+
+    const requestId = agentHistorySaveRequestRef.current + 1;
+    agentHistorySaveRequestRef.current = requestId;
+
+    try {
+      const response = await fetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          title: agentConversationTitle(messages),
+          messages: conversationMessagesFromAgentChat(messages)
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Agent conversation save failed with ${response.status}`);
+      }
+
+      if (isAgentHistoryOpen && agentHistorySaveRequestRef.current === requestId) {
+        void loadAgentHistorySummaries();
+      }
+    } catch {
+      if (isAgentHistoryOpen && agentHistorySaveRequestRef.current === requestId) {
+        setAgentHistoryError(t("agentHistorySaveFailed"));
+      }
+    }
+  }
+
+  async function loadAgentHistorySummaries(signal?: AbortSignal): Promise<void> {
+    setIsAgentHistoryLoading(true);
+    setAgentHistoryError("");
+
+    try {
+      const response = await fetch("/api/agent-conversations", { signal });
+      if (!response.ok) {
+        throw new Error(`Agent history load failed with ${response.status}`);
+      }
+
+      const body = (await response.json()) as AgentConversationListResponse;
+      const conversations = Array.isArray(body.conversations) ? body.conversations : [];
+      setAgentHistorySummaries(conversations);
+      if (conversations.length === 0) {
+        setSelectedAgentHistoryId(null);
+        setSelectedAgentConversation(null);
+        return;
+      }
+
+      const selectedId = selectedAgentHistoryId && conversations.some((conversation) => conversation.id === selectedAgentHistoryId)
+        ? selectedAgentHistoryId
+        : conversations[0]?.id;
+      if (selectedId) {
+        setSelectedAgentHistoryId(selectedId);
+        await loadAgentConversationDetail(selectedId, signal);
+      }
+    } catch {
+      if (!signal?.aborted) {
+        setAgentHistoryError(t("agentHistoryLoadFailed"));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsAgentHistoryLoading(false);
+      }
+    }
+  }
+
+  async function loadAgentConversationDetail(conversationId: string, signal?: AbortSignal): Promise<void> {
+    setIsAgentHistoryDetailLoading(true);
+    setAgentHistoryError("");
+
+    try {
+      const response = await fetch(`/api/agent-conversations/${encodeURIComponent(conversationId)}`, { signal });
+      if (!response.ok) {
+        throw new Error(`Agent conversation load failed with ${response.status}`);
+      }
+
+      setSelectedAgentConversation((await response.json()) as AgentConversation);
+    } catch {
+      if (!signal?.aborted) {
+        setSelectedAgentConversation(null);
+        setAgentHistoryError(t("agentHistoryDetailLoadFailed"));
+      }
+    } finally {
+      if (!signal?.aborted) {
+        setIsAgentHistoryDetailLoading(false);
+      }
+    }
+  }
+
+  function openAgentHistoryDialog(): void {
+    setIsAgentHistoryOpen(true);
+    if (currentAgentConversationId && agentMessages.length > 0) {
+      void saveAgentConversationNow(currentAgentConversationId, agentMessages);
+    }
+    void loadAgentHistorySummaries();
+  }
+
+  function closeAgentHistoryDialog(): void {
+    setIsAgentHistoryOpen(false);
+  }
+
+  function selectAgentHistoryConversation(conversationId: string): void {
+    setSelectedAgentHistoryId(conversationId);
+    void loadAgentConversationDetail(conversationId);
+  }
+
+  function resetAgentRuntimeForConversation(): void {
+    const socket = agentSocketRef.current;
+    stopAgentSocketHeartbeat(socket ?? undefined);
+    resetAgentSocketReconnectState();
+    activeAgentRunIdRef.current = null;
+    agentConnectionIdRef.current = null;
+    agentSocketRef.current = null;
+    agentSocketOpenPromiseRef.current = null;
+
+    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+      socket.close(1000, "agent_conversation_reset");
+    }
+
+    pendingAgentSelectedReferencesRef.current.clear();
+    agentPlanSelectedReferencesRef.current.clear();
+    agentPlanCreatedRunIdsRef.current.clear();
+    agentUserInputRunIdsRef.current.clear();
+    agentOutputPlacementCountsRef.current.clear();
+    deleteAgentJobLoadingPlaceholdersForRun();
+    agentJobPlaceholdersRef.current.clear();
+    clearCanvasAgentPlanNodes();
+    setExpandedThinkingMessageIds([]);
+    setCopiedAgentMessageId(null);
+    setAgentInput("");
+    setIsAgentSettingsOpen(false);
+    setAgentRunStatus("idle");
+  }
+
+  function restoreAgentConversation(conversation: AgentConversation): void {
+    if (isAgentRunning) {
+      return;
+    }
+
+    resetAgentRuntimeForConversation();
+    currentAgentConversationIdRef.current = conversation.id;
+    setCurrentAgentConversationId(conversation.id);
+    setAgentMessages(agentChatMessagesFromConversation(conversation.messages));
+    setIsAgentHistoryOpen(false);
+  }
+
   function addAgentMessage(message: Omit<AgentChatMessage, "id" | "timestamp">): void {
     setAgentMessages((messages) => [
       ...messages,
@@ -4838,7 +5305,9 @@ export function App() {
     }
 
     setAgentRunStatus("connecting");
-    const socket = new WebSocket(agentWebSocketUrl(agentConnectionIdRef.current, activeAgentRunIdRef.current));
+    const socket = new WebSocket(
+      agentWebSocketUrl(agentConnectionIdRef.current, activeAgentRunIdRef.current, currentAgentConversationIdRef.current)
+    );
     agentSocketRef.current = socket;
 
     const openPromise = new Promise<WebSocket>((resolve, reject) => {
@@ -4935,32 +5404,15 @@ export function App() {
       return;
     }
 
-    const socket = agentSocketRef.current;
-    stopAgentSocketHeartbeat(socket ?? undefined);
-    resetAgentSocketReconnectState();
-    activeAgentRunIdRef.current = null;
-    agentConnectionIdRef.current = null;
-    agentSocketRef.current = null;
-    agentSocketOpenPromiseRef.current = null;
-
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
-      socket.close(1000, "new_agent_conversation");
+    if (currentAgentConversationId && agentMessages.length > 0) {
+      void saveAgentConversationNow(currentAgentConversationId, agentMessages);
     }
 
-    pendingAgentSelectedReferencesRef.current.clear();
-    agentPlanSelectedReferencesRef.current.clear();
-    agentPlanCreatedRunIdsRef.current.clear();
-    agentUserInputRunIdsRef.current.clear();
-    agentOutputPlacementCountsRef.current.clear();
-    deleteAgentJobLoadingPlaceholdersForRun();
-    agentJobPlaceholdersRef.current.clear();
-    clearCanvasAgentPlanNodes();
+    resetAgentRuntimeForConversation();
+    const nextConversationId = createAgentConversationId();
+    currentAgentConversationIdRef.current = nextConversationId;
+    setCurrentAgentConversationId(nextConversationId);
     setAgentMessages([]);
-    setExpandedThinkingMessageIds([]);
-    setCopiedAgentMessageId(null);
-    setAgentInput("");
-    setIsAgentSettingsOpen(false);
-    setAgentRunStatus("idle");
   }
 
   function selectAgentSizePreset(nextPresetId: string): void {
@@ -5013,6 +5465,7 @@ export function App() {
     const requestId = `agent-request-${agentRequestRef.current + 1}`;
     const runId = `agent-run-${crypto.randomUUID()}`;
     agentRequestRef.current += 1;
+    ensureCurrentAgentConversationId();
     activeAgentRunIdRef.current = runId;
     setAgentInput("");
     setIsAgentSettingsOpen(false);
@@ -5121,6 +5574,7 @@ export function App() {
     }
 
     const runId = `agent-plan-run-${crypto.randomUUID()}`;
+    ensureCurrentAgentConversationId();
     activeAgentRunIdRef.current = runId;
     setAgentRunStatus("connecting");
 
@@ -5879,6 +6333,16 @@ export function App() {
                 {isAgentConfigLoading ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <RotateCcw className="size-4" aria-hidden="true" />}
               </button>
               <button
+                aria-label={t("agentHistoryOpen")}
+                className="agent-icon-button"
+                data-testid="agent-history-open"
+                title={t("agentHistoryOpen")}
+                type="button"
+                onClick={openAgentHistoryDialog}
+              >
+                <History className="size-4" aria-hidden="true" />
+              </button>
+              <button
                 aria-label={t("agentNewConversation")}
                 className="agent-icon-button"
                 data-testid="agent-new-conversation"
@@ -6268,6 +6732,23 @@ export function App() {
         </>
         )}
       </aside>
+
+      {isAgentHistoryOpen ? (
+        <AgentHistoryDialog
+          conversation={selectedAgentConversation}
+          error={agentHistoryError}
+          formatDateTime={formatDateTime}
+          isDetailLoading={isAgentHistoryDetailLoading}
+          isLoading={isAgentHistoryLoading}
+          isRestoringDisabled={isAgentRunning}
+          selectedConversationId={selectedAgentHistoryId}
+          summaries={agentHistorySummaries}
+          t={t}
+          onClose={closeAgentHistoryDialog}
+          onRestore={restoreAgentConversation}
+          onSelectConversation={selectAgentHistoryConversation}
+        />
+      ) : null}
 
       {isStorageDialogOpen ? (
         <div className="app-modal-backdrop fixed inset-0 z-[3000] flex items-center justify-center bg-neutral-950/45 px-4 py-6" data-testid="storage-dialog">

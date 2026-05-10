@@ -37,6 +37,77 @@ export interface AgentPlannerOptions {
   reasoningEffort?: AgentReasoningEffort;
 }
 
+export type AgentConversationMessageRole = "user" | "assistant" | "thinking" | "system" | "error" | "question" | "plan";
+
+export interface AgentConversationAssetPreview {
+  id: string;
+  assetId: string;
+  jobId: string;
+  outputId?: string;
+  planId?: string;
+  shapeId?: string;
+  url: string;
+}
+
+export interface AgentConversationMessage {
+  id: string;
+  role: AgentConversationMessageRole;
+  content: string;
+  details?: string;
+  timestamp: string;
+  runId?: string;
+  plan?: GenerationPlan | unknown;
+  previews?: AgentConversationAssetPreview[];
+}
+
+export interface AgentConversationOutputReference {
+  index: number;
+  assetId: string;
+  label?: string;
+  width?: number;
+  height?: number;
+  mimeType?: string;
+  planId?: string;
+  jobId?: string;
+  outputId?: string;
+}
+
+export interface AgentConversationContextSnapshot {
+  previousUserText?: string;
+  previousPlan?: GenerationPlan;
+  previousOutputs: AgentConversationOutputReference[];
+}
+
+export interface AgentConversationSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  lastMessagePreview?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConversation {
+  id: string;
+  title: string;
+  messages: AgentConversationMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentConversationListResponse {
+  conversations: AgentConversationSummary[];
+}
+
+export interface SaveAgentConversationRequest {
+  title?: string;
+  messages: AgentConversationMessage[];
+}
+
+export interface SaveAgentConversationResponse {
+  conversation: AgentConversation;
+}
+
 export type AgentClientMessageType =
   | "user_message"
   | "revise_plan"
@@ -123,6 +194,8 @@ export interface AgentBaseServerEvent {
 export interface AgentConnectedEvent extends AgentBaseServerEvent {
   type: "connected";
   connectionId: string;
+  conversationId?: string;
+  restoredContext?: boolean;
 }
 
 export interface AgentPongEvent extends AgentBaseServerEvent {

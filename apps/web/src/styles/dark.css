@@ -362,6 +362,61 @@
   border-color: rgb(248 216 177 / 0.34);
 }
 
+.app-root[data-canvas-theme="dark"] .agent-history-backdrop {
+  background: rgb(0 0 0 / 0.62);
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-dialog,
+.app-root[data-canvas-theme="dark"] .agent-history-dialog__header,
+.app-root[data-canvas-theme="dark"] .agent-history-detail,
+.app-root[data-canvas-theme="dark"] .agent-history-detail__head {
+  border-color: var(--line);
+  background: var(--paper-panel);
+  color: var(--ink);
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-list {
+  border-color: var(--line);
+  background: #1a1512;
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-dialog__mark,
+.app-root[data-canvas-theme="dark"] .agent-history-list__item {
+  border-color: rgb(198 95 50 / 0.26);
+  background: #161210;
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-list__item:hover,
+.app-root[data-canvas-theme="dark"] .agent-history-list__item:focus-visible,
+.app-root[data-canvas-theme="dark"] .agent-history-list__item[data-selected="true"] {
+  border-color: #f59f6f;
+  background: rgb(126 50 26 / 0.24);
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-list__item-meta,
+.app-root[data-canvas-theme="dark"] .agent-history-dialog__mark {
+  color: #f8d8b1;
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-dialog__alert {
+  border-color: rgb(248 113 113 / 0.35);
+  background: rgb(127 29 29 / 0.22);
+  color: #fca5a5;
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-restore {
+  border-color: #2dd4bf;
+  background: #0f766e;
+  color: #f8fffd;
+}
+
+.app-root[data-canvas-theme="dark"] .agent-history-restore:hover:not(:disabled),
+.app-root[data-canvas-theme="dark"] .agent-history-restore:focus-visible {
+  border-color: #f59f6f;
+  background: #f59f6f;
+  color: #25130d;
+}
+
 .app-root[data-canvas-theme="dark"] .agent-plan-node {
   border-color: rgb(198 95 50 / 0.32);
   background:

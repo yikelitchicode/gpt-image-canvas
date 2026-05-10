@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS agent_llm_configs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_conversations (
+  id TEXT PRIMARY KEY NOT NULL,
+  title TEXT NOT NULL,
+  messages_json TEXT NOT NULL,
+  context_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
   id TEXT PRIMARY KEY NOT NULL,
   access_token TEXT,
@@ -161,6 +170,7 @@ CREATE INDEX IF NOT EXISTS generation_outputs_generation_id_idx ON generation_ou
 CREATE INDEX IF NOT EXISTS generation_outputs_asset_id_idx ON generation_outputs(asset_id);
 CREATE INDEX IF NOT EXISTS generation_reference_assets_generation_id_idx ON generation_reference_assets(generation_id);
 CREATE INDEX IF NOT EXISTS generation_reference_assets_asset_id_idx ON generation_reference_assets(asset_id);
+CREATE INDEX IF NOT EXISTS agent_conversations_updated_at_idx ON agent_conversations(updated_at);
 `);
 
 ensureColumn("assets", "cloud_provider", "cloud_provider TEXT");

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { WSEvents, WSContext, WSMessageReceive } from "hono/ws";
 import {
   MAX_AGENT_SELECTED_REFERENCES,
+  type AgentConversationContextSnapshot,
+  type AgentConversationOutputReference,
   type AgentClientMessage,
   type AgentClientMessageType,
   type AgentContextResolvedReference,
@@ -11,6 +13,7 @@ import {
   type GeneratedAsset,
   type GenerationPlan
 } from "../contracts.js";
+import { getAgentConversationContext, saveAgentConversationContext } from "./conversation-store.js";
 import { getUsableAgentLlmConfig } from "./config.js";
 import {
   executeGenerationPlan,
@@ -18,6 +21,7 @@ import {
   type StoredAgentGenerationPlan
 } from "./executor.js";
 import { createGenerationPlan, type AgentPlannerConversationContext } from "./planner.js";
+import { getStoredAssetFile, saveReferenceImageInput } from "../generation/image-generation.js";
 
 const OPEN_READY_STATE = 1;
 const AGENT_SOCKET_SERVER_HEARTBEAT_INTERVAL_MS = 10_000;
@@ -47,6 +51,7 @@ interface ActiveAgentRun {
 
 interface AgentSocketSession {
   connectionId: string;
+  conversationId?: string;
   ws?: WSContext;
   activeRun?: ActiveAgentRun;
   plans: Map<string, StoredAgentGenerationPlan>;
@@ -63,18 +68,6 @@ interface AgentConversationContext {
   pendingOutputsByRun: Map<string, AgentConversationOutputReference[]>;
 }
 
-export interface AgentConversationOutputReference {
-  index: number;
-  assetId: string;
-  label?: string;
-  width?: number;
-  height?: number;
-  mimeType?: string;
-  planId?: string;
-  jobId?: string;
-  outputId?: string;
-}
-
 interface ParsedMessage {
   ok: true;
   value: AgentClientMessage;
@@ -88,8 +81,8 @@ interface MessageParseError {
 
 const sessions = new Map<string, AgentSocketSession>();
 
-export function createAgentWebSocketEvents(connectionId?: string, runId?: string): WSEvents {
-  const { resumeFailedRunId, session } = resolveAgentSocketSession(connectionId, runId);
+export function createAgentWebSocketEvents(connectionId?: string, runId?: string, conversationId?: string): WSEvents {
+  const { resumeFailedRunId, session } = resolveAgentSocketSession(connectionId, runId, conversationId);
 
   return {
     onOpen(_event, ws) {
@@ -97,6 +90,8 @@ export function createAgentWebSocketEvents(connectionId?: string, runId?: string
       sendDirectEvent(ws, {
         type: "connected",
         connectionId: session.connectionId,
+        conversationId: session.conversationId,
+        restoredContext: hasConversationContext(session.conversationContext),
         timestamp: new Date().toISOString()
       });
       if (resumeFailedRunId) {
@@ -135,27 +130,47 @@ export function closeAllAgentSessions(reason = "server_shutdown"): void {
   sessions.clear();
 }
 
-function createAgentSocketSession(): AgentSocketSession {
+function createAgentSocketSession(conversationId?: string): AgentSocketSession {
+  const contextSnapshot = getAgentConversationContext(conversationId);
   return {
     connectionId: randomUUID(),
+    conversationId: normalizeConversationId(conversationId),
     plans: new Map(),
-    conversationContext: {
-      previousOutputs: [],
-      pendingOutputsByRun: new Map()
-    },
+    conversationContext: conversationContextFromSnapshot(contextSnapshot),
     pendingEvents: []
   };
 }
 
+function normalizeConversationId(value: string | undefined): string | undefined {
+  const id = value?.trim();
+  return id && /^[a-zA-Z0-9:_-]{1,120}$/u.test(id) ? id : undefined;
+}
+
+function conversationContextFromSnapshot(snapshot: AgentConversationContextSnapshot | undefined): AgentConversationContext {
+  return {
+    previousUserText: snapshot?.previousUserText,
+    previousPlan: snapshot?.previousPlan,
+    previousOutputs: snapshot?.previousOutputs ?? [],
+    pendingOutputsByRun: new Map()
+  };
+}
+
+function hasConversationContext(context: AgentConversationContext): boolean {
+  return Boolean(context.previousUserText || context.previousPlan || context.previousOutputs.length > 0);
+}
+
 function resolveAgentSocketSession(
   requestedConnectionId?: string,
-  requestedRunId?: string
+  requestedRunId?: string,
+  requestedConversationId?: string
 ): { session: AgentSocketSession; resumeFailedRunId?: string } {
   const connectionId = requestedConnectionId?.trim();
   const runId = requestedRunId?.trim();
+  const conversationId = normalizeConversationId(requestedConversationId);
   if (connectionId) {
     const existingSession = sessions.get(connectionId);
     if (existingSession) {
+      existingSession.conversationId ??= conversationId;
       return { session: existingSession };
     }
   }
@@ -163,11 +178,12 @@ function resolveAgentSocketSession(
   if (runId) {
     const activeRunSession = [...sessions.values()].find((session) => session.activeRun?.id === runId);
     if (activeRunSession) {
+      activeRunSession.conversationId ??= conversationId;
       return { session: activeRunSession };
     }
   }
 
-  const session = createAgentSocketSession();
+  const session = createAgentSocketSession(conversationId);
   return {
     session,
     resumeFailedRunId: connectionId && runId ? runId : undefined
@@ -419,9 +435,22 @@ async function handleAgentPlanMessage(
   llmConfig: NonNullable<ReturnType<typeof getUsableAgentLlmConfig>>
 ): Promise<void> {
   let result: Awaited<ReturnType<typeof createGenerationPlan>>;
-  const clientSelectedReferences = Array.isArray(message.selectedReferences)
+  const rawClientSelectedReferences = Array.isArray(message.selectedReferences)
     ? (message.selectedReferences as AgentSelectedCanvasReference[])
     : [];
+  let clientSelectedReferences: AgentSelectedCanvasReference[];
+  try {
+    clientSelectedReferences = await persistAgentSelectedReferences(rawClientSelectedReferences);
+  } catch (error) {
+    finishAgentPlanRunWithError(
+      session,
+      message,
+      activeRun,
+      "invalid_selected_references",
+      error instanceof Error && error.message ? error.message : "Selected canvas references could not be saved."
+    );
+    return;
+  }
   let effectiveSelectedReferences: AgentSelectedCanvasReference[] = clientSelectedReferences;
   let selectedReferencesForPlanner: unknown = message.selectedReferences ?? [];
   let resolvedConversationReferences: AgentConversationOutputReference[] | undefined;
@@ -452,6 +481,10 @@ async function handleAgentPlanMessage(
         timestamp: new Date().toISOString()
       });
     }
+  }
+
+  if (clientSelectedReferences.length > 0) {
+    selectedReferencesForPlanner = clientSelectedReferences;
   }
 
   const conversationContext = createPlannerConversationContext(
@@ -531,10 +564,11 @@ async function handleAgentPlanMessage(
 
   session.plans.set(result.plan.id, {
     plan: result.plan,
-    selectedReferences: effectiveSelectedReferences
+    selectedReferences: sanitizeSelectedReferencesForStorage(effectiveSelectedReferences)
   });
   session.conversationContext.previousUserText = message.text;
   session.conversationContext.previousPlan = result.plan;
+  storeConversationContextForSession(session);
 
   sendSessionEvent(session, {
     type: "plan_created",
@@ -607,6 +641,96 @@ function contextResolvedReferenceFromOutput(output: AgentConversationOutputRefer
   };
 }
 
+async function persistAgentSelectedReferences(
+  references: AgentSelectedCanvasReference[]
+): Promise<AgentSelectedCanvasReference[]> {
+  return Promise.all(
+    references.slice(0, MAX_AGENT_SELECTED_REFERENCES).map(async (reference) => {
+      const storedAssetId = storedAssetIdForAgentReference(reference.assetId);
+      if (storedAssetId) {
+        return {
+          ...reference,
+          assetId: storedAssetId
+        };
+      }
+
+      if (!reference.dataUrl) {
+        return reference;
+      }
+
+      const asset = await saveReferenceImageInput({
+        dataUrl: reference.dataUrl,
+        fileName: fileNameForSelectedReference(reference)
+      });
+
+      return {
+        ...reference,
+        assetId: asset.id,
+        label: reference.label ?? asset.fileName,
+        width: asset.width,
+        height: asset.height,
+        mimeType: asset.mimeType
+      };
+    })
+  );
+}
+
+function storedAssetIdForAgentReference(assetId: string): string | undefined {
+  for (const candidate of storedAssetIdCandidates(assetId)) {
+    const stored = getStoredAssetFile(candidate);
+    if (stored) {
+      return stored.id;
+    }
+  }
+
+  return undefined;
+}
+
+function storedAssetIdCandidates(assetId: string): string[] {
+  const trimmed = assetId.trim();
+  const candidates = [trimmed];
+  const tldrawAssetMatch = /^asset:(.+)$/u.exec(trimmed);
+  if (tldrawAssetMatch?.[1]) {
+    candidates.push(tldrawAssetMatch[1]);
+  }
+
+  return candidates.filter((candidate, index) => candidate && candidates.indexOf(candidate) === index);
+}
+
+function fileNameForSelectedReference(reference: AgentSelectedCanvasReference): string | undefined {
+  const label = reference.label?.trim();
+  if (!label) {
+    return undefined;
+  }
+
+  if (/\.(png|jpe?g|webp)$/iu.test(label)) {
+    return label;
+  }
+
+  if (!reference.mimeType) {
+    return label;
+  }
+
+  const extension = reference.mimeType === "image/jpeg" ? "jpg" : reference.mimeType.split("/")[1] || "png";
+  return `${label}.${extension}`;
+}
+
+function sanitizeSelectedReferencesForStorage(references: AgentSelectedCanvasReference[]): AgentSelectedCanvasReference[] {
+  return references.map(({ dataUrl: _dataUrl, ...reference }) => reference);
+}
+
+function storeConversationContextForSession(session: AgentSocketSession): void {
+  if (!session.conversationId) {
+    return;
+  }
+
+  saveAgentConversationContext(session.conversationId, {
+    previousUserText: session.conversationContext.previousUserText,
+    previousPlan: session.conversationContext.previousPlan,
+    previousOutputs: session.conversationContext.previousOutputs
+  });
+}
+
 async function handleAgentPlanExecutionMessage(
   message: Extract<AgentClientMessage, { type: "execute_plan" | "retry_failed" }>,
   session: AgentSocketSession,
@@ -656,6 +780,7 @@ async function handleAgentPlanExecutionMessage(
   session.activeRun = undefined;
   scheduleDisconnectedSessionCleanup(session);
   updateConversationContextAfterExecution(session, activeRun.id, result.plan, storedPlan.plan);
+  storeConversationContextForSession(session);
   session.plans.set(result.plan.id, {
     plan: result.plan,
     selectedReferences: storedPlan.selectedReferences

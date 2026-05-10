@@ -215,6 +215,8 @@ button {
 .agent-param-chip:not(:disabled):active,
 .agent-thinking-details__toggle:not(:disabled):active,
 .agent-thinking-controls__option:not(:disabled):active,
+.agent-history-list__item:not(:disabled):active,
+.agent-history-restore:not(:disabled):active,
 .agent-send-or-cancel:not(:disabled):active,
 .agent-plan-node__actions button:not(:disabled):active,
 .agent-plan-node__job-row:not(:disabled):active {
@@ -369,6 +371,8 @@ a:focus-visible {
   .agent-param-chip:not(:disabled):active,
   .agent-thinking-details__toggle:not(:disabled):active,
   .agent-thinking-controls__option:not(:disabled):active,
+  .agent-history-list__item:not(:disabled):active,
+  .agent-history-restore:not(:disabled):active,
   .agent-send-or-cancel:not(:disabled):active,
   .agent-plan-node__actions button:not(:disabled):active,
   .agent-plan-node__job-row:not(:disabled):active {
