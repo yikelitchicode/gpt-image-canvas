@@ -5180,6 +5180,7 @@ export function App() {
             code: event.code,
             fallbackMessage: event.message,
             fallbackText: event.message,
+            includeHttpSuffix: false,
             locale,
             status: 400
           }),

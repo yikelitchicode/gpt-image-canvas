@@ -163,7 +163,7 @@ const commonApiErrorMessages: Record<Locale, Record<string, string>> = {
     agent_skill_not_found: "找不到这个 Agent Skill。",
     agent_skill_required: "核心 Agent Skill 不能关闭。",
     invalid_agent_skill: "Agent Skill 内容无效。",
-    agent_requires_user_input: "我需要先确认：这次是直接编辑选中的原图，还是生成新的设计图？请补充说明后再发送。",
+    agent_requires_user_input: "我需要先确认：这次是直接编辑选中的原图，还是按上一条需求生成新的设计图？回复“编辑原图”或“新的设计图”即可。",
     missing_selected_canvas_reference: "请先在画布上选中要编辑的原图，然后再发送这条 Agent 请求。",
     missing_agent_config: "请先配置 Agent LLM。",
     missing_api_key: "服务器缺少可用的 OpenAI API Key。",
@@ -191,7 +191,7 @@ const commonApiErrorMessages: Record<Locale, Record<string, string>> = {
     agent_skill_not_found: "That Agent Skill was not found.",
     agent_skill_required: "The core Agent Skill cannot be disabled.",
     invalid_agent_skill: "The Agent Skill content is invalid.",
-    agent_requires_user_input: "Please confirm whether the Agent should edit the selected original image(s) directly or generate a new design image.",
+    agent_requires_user_input: "Please confirm whether the Agent should edit the selected original image(s) directly or generate a new design image from the previous request.",
     missing_selected_canvas_reference: "Select the original canvas image(s) to edit, then send this Agent request again.",
     missing_agent_config: "Configure the Agent LLM first.",
     missing_api_key: "The server does not have an available OpenAI API key.",
@@ -1470,6 +1470,7 @@ export function localizedApiErrorMessage(input: {
   code?: string;
   fallbackMessage?: string;
   fallbackText: string;
+  includeHttpSuffix?: boolean;
   locale: Locale;
   status: number;
 }): string {
@@ -1479,7 +1480,8 @@ export function localizedApiErrorMessage(input: {
     return input.fallbackText;
   }
 
-  return `${mapped ?? fallbackMessage}${messages[input.locale].errorHttpSuffix({ status: input.status })}`;
+  const suffix = input.includeHttpSuffix === false ? "" : messages[input.locale].errorHttpSuffix({ status: input.status });
+  return `${mapped ?? fallbackMessage}${suffix}`;
 }
 
 function createTranslate(locale: Locale): Translate {

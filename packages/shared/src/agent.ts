@@ -135,6 +135,7 @@ export interface AgentConversationOutputReference {
 
 export interface AgentConversationContextSnapshot {
   previousUserText?: string;
+  pendingUserText?: string;
   previousPlan?: GenerationPlan;
   previousOutputs: AgentConversationOutputReference[];
 }

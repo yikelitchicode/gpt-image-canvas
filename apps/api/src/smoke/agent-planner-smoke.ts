@@ -71,6 +71,8 @@ async function main(): Promise<void> {
   await smokeDirectPlannerUsesSelectedSkills();
   await smokePlannerQuestionOutput();
   await smokeMissingSelectedReferenceQuestion();
+  await smokeStandaloneTextImageWithImageCopyDoesNotRequireReference();
+  await smokeStandalonePromptQuestionReflectsToPlan();
   await smokeSelectedEditPlanWithoutReferenceQuestion();
   await smokeSelectedQuestionOutputFallbackPlan();
   await smokePerImageSelectedReferencePlan();
@@ -443,6 +445,25 @@ function smokePlannerConversationContextPrompt(): void {
   expect(content.includes("Previous user request: Generate 10 Guangdong food images."), "planner prompt includes previous user request");
   expect(content.includes("output3: assetId=\"asset-output-3\""), "planner prompt includes resolved output index");
   expect(content.includes("Resolved follow-up image references from previous Agent outputs"), "planner prompt explains resolved references");
+
+  const clarificationMessage = buildPlannerUserMessage({
+    userText: "新的设计图",
+    defaults,
+    selectedReferences: [],
+    supportsVision: false,
+    conversationContext: {
+      previousUserText: "在原图上加一行标题。"
+    }
+  });
+  const clarificationContent =
+    typeof clarificationMessage.content === "string"
+      ? clarificationMessage.content
+      : String(clarificationMessage.content.find((block) => block.type === "text")?.text ?? "");
+  expect(clarificationContent.includes("Previous user request: 在原图上加一行标题。"), "clarification prompt keeps previous request");
+  expect(
+    clarificationContent.includes("Create a new standalone design image for the previous request"),
+    "clarification prompt explains new-design intent"
+  );
 }
 
 function smokeEcommerceSkillIntentDetection(): void {
@@ -717,6 +738,61 @@ async function smokeMissingSelectedReferenceQuestion(): Promise<void> {
 
   expect(!result.ok, "missing selected reference edit request asks for user input");
   expect(result.code === "missing_selected_canvas_reference", "missing selected reference uses stable code");
+}
+
+async function smokeStandaloneTextImageWithImageCopyDoesNotRequireReference(): Promise<void> {
+  const result = await createGenerationPlan({
+    userText: "生成一张新品海报，图上加标题和卖点文案。",
+    defaults,
+    selectedReferences: [],
+    llmConfig: llmConfigFixture(),
+    now,
+    runner: staticPlannerRunner(
+      planFixture({
+        jobs: [
+          jobFixture({
+            id: "standalone_poster",
+            prompt: "Create a standalone product poster with a headline and selling-point copy.",
+            references: []
+          })
+        ]
+      })
+    )
+  });
+
+  expectPlannerOk(result, "standalone text-to-image prompt with image copy does not require a reference");
+  expect(result.plan.jobs[0]?.references.length === 0, "standalone image-copy plan keeps zero references");
+}
+
+async function smokeStandalonePromptQuestionReflectsToPlan(): Promise<void> {
+  const runner = sequencedPlannerRunner([
+    {
+      kind: "agent_user_question",
+      code: "missing_selected_canvas_reference",
+      message: "Select the original image first.",
+      createdBy: "agent"
+    },
+    planFixture({
+      jobs: [
+        jobFixture({
+          id: "standalone_poster_after_reflection",
+          prompt: "Create a standalone product poster with a headline and selling-point copy.",
+          references: []
+        })
+      ]
+    })
+  ]);
+  const result = await createGenerationPlan({
+    userText: "生成一张新品海报，图上加标题和卖点文案。",
+    defaults,
+    selectedReferences: [],
+    llmConfig: llmConfigFixture(),
+    now,
+    runner
+  });
+
+  expectPlannerOk(result, "standalone prompt question output is corrected after reflection");
+  expect(runner.calls.length === 2, "standalone prompt missing-reference question triggers one reflection");
 }
 
 async function smokeSelectedEditPlanWithoutReferenceQuestion(): Promise<void> {

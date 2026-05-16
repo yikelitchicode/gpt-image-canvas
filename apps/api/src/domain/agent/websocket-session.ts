@@ -64,6 +64,7 @@ interface AgentSocketSession {
 
 interface AgentConversationContext {
   previousUserText?: string;
+  pendingUserText?: string;
   previousPlan?: GenerationPlan;
   previousOutputs: AgentConversationOutputReference[];
   pendingOutputsByRun: Map<string, AgentConversationOutputReference[]>;
@@ -150,6 +151,7 @@ function normalizeConversationId(value: string | undefined): string | undefined 
 function conversationContextFromSnapshot(snapshot: AgentConversationContextSnapshot | undefined): AgentConversationContext {
   return {
     previousUserText: snapshot?.previousUserText,
+    pendingUserText: snapshot?.pendingUserText,
     previousPlan: snapshot?.previousPlan,
     previousOutputs: snapshot?.previousOutputs ?? [],
     pendingOutputsByRun: new Map()
@@ -157,7 +159,7 @@ function conversationContextFromSnapshot(snapshot: AgentConversationContextSnaps
 }
 
 function hasConversationContext(context: AgentConversationContext): boolean {
-  return Boolean(context.previousUserText || context.previousPlan || context.previousOutputs.length > 0);
+  return Boolean(context.pendingUserText || context.previousUserText || context.previousPlan || context.previousOutputs.length > 0);
 }
 
 function resolveAgentSocketSession(
@@ -547,6 +549,11 @@ async function handleAgentPlanMessage(
   scheduleDisconnectedSessionCleanup(session);
 
   if (!result.ok) {
+    if (isAgentUserInputErrorCode(result.code)) {
+      session.conversationContext.pendingUserText = message.text;
+      storeConversationContextForSession(session);
+    }
+
     sendSessionError(session, {
       code: result.code,
       message: result.message,
@@ -568,7 +575,11 @@ async function handleAgentPlanMessage(
     plan: result.plan,
     selectedReferences: sanitizeSelectedReferencesForStorage(effectiveSelectedReferences)
   });
-  session.conversationContext.previousUserText = message.text;
+  session.conversationContext.previousUserText = resolvedConversationUserText(
+    session.conversationContext.pendingUserText,
+    message.text
+  );
+  session.conversationContext.pendingUserText = undefined;
   session.conversationContext.previousPlan = result.plan;
   storeConversationContextForSession(session);
 
@@ -622,17 +633,42 @@ function createPlannerConversationContext(
   resolvedReferences: AgentConversationOutputReference[] | undefined,
   referenceResolution: AgentPlannerConversationContext["referenceResolution"] | undefined
 ): AgentPlannerConversationContext | undefined {
-  if (!context.previousUserText && !context.previousPlan && context.previousOutputs.length === 0 && !resolvedReferences?.length) {
+  const previousUserText = context.pendingUserText ?? context.previousUserText;
+  if (!previousUserText && !context.previousPlan && context.previousOutputs.length === 0 && !resolvedReferences?.length) {
     return undefined;
   }
 
   return {
-    previousUserText: context.previousUserText,
+    previousUserText,
     previousPlan: context.previousPlan,
     previousOutputs: context.previousOutputs,
     resolvedReferences,
     referenceResolution
   };
+}
+
+function isAgentUserInputErrorCode(code: string): boolean {
+  return code === "missing_selected_canvas_reference" || code === "agent_requires_user_input";
+}
+
+function resolvedConversationUserText(pendingUserText: string | undefined, userText: string): string {
+  const pending = pendingUserText?.trim();
+  const current = userText.trim();
+  if (!pending || !isShortClarificationResponse(current)) {
+    return current;
+  }
+
+  return `Original request: ${pending}\nClarification: ${current}`;
+}
+
+function isShortClarificationResponse(userText: string): boolean {
+  const text = userText.trim().toLowerCase();
+  return (
+    text.length <= 80 &&
+    /新的设计图|新设计图|编辑原图|直接编辑|生成新的|生成新图|文生图|new design|new image|generate new|edit original|edit selected/u.test(
+      text
+    )
+  );
 }
 
 function contextResolvedReferenceFromOutput(output: AgentConversationOutputReference): AgentContextResolvedReference {
@@ -728,6 +764,7 @@ function storeConversationContextForSession(session: AgentSocketSession): void {
 
   saveAgentConversationContext(session.conversationId, {
     previousUserText: session.conversationContext.previousUserText,
+    pendingUserText: session.conversationContext.pendingUserText,
     previousPlan: session.conversationContext.previousPlan,
     previousOutputs: session.conversationContext.previousOutputs
   });

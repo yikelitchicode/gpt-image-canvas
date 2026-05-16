@@ -417,6 +417,20 @@ function evaluatePlannerAttemptOutput(input: {
   const fallbackPlan = createSelectedReferenceEditFallbackPlan(input);
   const userQuestion = parsePlannerUserQuestionModelOutput(input.modelText);
   if (userQuestion) {
+    if (!shouldAcceptPlannerUserQuestion(userQuestion, input.userText, input.selectedReferences)) {
+      return {
+        ok: false,
+        shouldReflect: true,
+        previousOutput,
+        failure: {
+          ok: false,
+          code: "agent_requires_user_input",
+          message:
+            "The user request can be planned as a text-to-image request. Do not ask for selected canvas references unless the user explicitly mentions an original, selected, current, or previous image."
+        }
+      };
+    }
+
     return fallbackPlan
       ? {
           ok: true,
@@ -472,6 +486,18 @@ function evaluatePlannerAttemptOutput(input: {
     ok: true,
     plan: validated.plan
   };
+}
+
+function shouldAcceptPlannerUserQuestion(
+  question: AgentPlannerFailure,
+  userText: string,
+  selectedReferences: AgentSelectedCanvasReference[]
+): boolean {
+  if (question.code !== "missing_selected_canvas_reference") {
+    return true;
+  }
+
+  return hasSelectedReferenceEditIntent(userText, selectedReferences.length);
 }
 
 function agentRunCancelledResult(): AgentPlannerFailure {
@@ -802,11 +828,13 @@ export function buildPlannerUserMessage(input: {
     formatReferenceSummary(reference, index, input.supportsVision)
   );
   const contextSummary = formatConversationContextSummary(input.conversationContext);
+  const clarificationSummary = formatClarificationFollowUpSummary(input.userText, input.conversationContext);
   const text = [
     `User request:\n${input.userText.trim()}`,
     `Current Agent defaults:\n${JSON.stringify(input.defaults)}`,
     `supportsVision: ${input.supportsVision ? "true" : "false"}`,
     contextSummary,
+    clarificationSummary,
     'Allowed quality values: "auto", "low", "medium", "high". Allowed outputFormat values: "png", "jpeg", "webp". Omit job quality/outputFormat when using defaults.',
     referenceSummaries.length > 0
       ? `Selected canvas references, capped at ${MAX_AGENT_SELECTED_REFERENCES}:\n${referenceSummaries.join("\n")}`
@@ -1113,9 +1141,7 @@ function selectedReferenceEditIntent(
   requiresSingleCombinedOutput: boolean;
 } {
   const text = normalizeIntentText(userText);
-  const hasSelectedContext =
-    selectedReferenceCount > 0 ||
-    /原图|原始图|原本|选中|当前图|这张图|这些图|图片上|图上|画面上|每张图|每一张|所有图|全部图|selected image|selected images|original image|source image|current image|each image|every image|all selected/u.test(text);
+  const hasSelectedContext = selectedReferenceCount > 0 || hasExplicitExistingImageTarget(text);
   const hasEditAction =
     /编辑|修改|调整|改成|改为|优化|润色|重绘|修图|保留|基于|基础上|加字|加上字|加文字|配字|配上字|配文字|配上文字|配文|文案|标题|字幕|字标|字体|排版|贴字|一致|统一|edit|modify|retouch|polish|redesign|based on|from the original|add text|text overlay|caption|title|typography|copy|font|consistent|unify/u.test(text);
   const requiresEverySelectedReference =
@@ -1131,6 +1157,12 @@ function selectedReferenceEditIntent(
     allowsCombinedReferences,
     requiresSingleCombinedOutput
   };
+}
+
+function hasExplicitExistingImageTarget(text: string): boolean {
+  return /原图|原始图|原始图片|原本|选中|所选|当前图|当前图片|这张图|这张图片|这些图|这些图片|刚刚生成|刚才生成|上一轮|上次生成|之前生成|selected image|selected images|selected original|selected originals|original image|original images|source image|source images|current image|current images|this image|these images|previous output|previous outputs|latest output|latest outputs|generated output|generated outputs/u.test(
+    text
+  );
 }
 
 function hasSelectedReferenceEditIntent(userText: string, selectedReferenceCount = 0): boolean {
@@ -1904,6 +1936,53 @@ function formatConversationContextSummary(context: AgentPlannerConversationConte
   }
 
   return lines.length > 1 ? lines.join("\n") : "";
+}
+
+function formatClarificationFollowUpSummary(
+  userText: string,
+  context: AgentPlannerConversationContext | undefined
+): string {
+  const previousUserText = context?.previousUserText?.trim();
+  if (!previousUserText) {
+    return "";
+  }
+
+  const clarification = agentClarificationIntent(userText);
+  if (!clarification) {
+    return "";
+  }
+
+  const interpretation =
+    clarification === "new_design"
+      ? "Create a new standalone design image for the previous request. Do not require selected/original canvas images for this clarification."
+      : "Edit the selected/original image sources for the previous request.";
+
+  return [
+    "Current message appears to answer a previous Agent clarification question.",
+    "Use the previous user request together with this clarification instead of planning from the short answer alone.",
+    `Clarification interpretation: ${interpretation}`
+  ].join("\n");
+}
+
+function agentClarificationIntent(userText: string): "new_design" | "edit_original" | undefined {
+  const text = normalizeIntentText(userText);
+  if (
+    /新的设计图|新设计图|生成新图|生成新的|重新生成|独立生成|文生图|不是编辑|不编辑原图|不用原图|不需要原图|无需原图|new design|new image|generate new|standalone|text to image/u.test(
+      text
+    )
+  ) {
+    return "new_design";
+  }
+
+  if (
+    /编辑原图|直接编辑|改原图|修改原图|用原图|基于原图|选中的原图|edit original|edit selected|use selected|use original/u.test(
+      text
+    )
+  ) {
+    return "edit_original";
+  }
+
+  return undefined;
 }
 
 function formatPlanSummary(plan: GenerationPlan): string {

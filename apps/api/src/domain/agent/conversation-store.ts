@@ -265,8 +265,10 @@ function sanitizeContext(input: unknown): AgentConversationContextSnapshot {
   }
 
   const previousUserText = stringValue(input.previousUserText);
+  const pendingUserText = stringValue(input.pendingUserText);
   return {
     previousUserText,
+    pendingUserText,
     previousPlan: isRecord(input.previousPlan) ? (stripPersistentDataUrls(input.previousPlan) as GenerationPlan) : undefined,
     previousOutputs: sanitizeConversationOutputs(input.previousOutputs)
   };
