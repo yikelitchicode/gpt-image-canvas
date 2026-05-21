@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.0 - 2026-05-21
+
+Prompt Pool release.
+
+### Added
+
+- Prompt Pool route for browsing bundled prompt JSON with masonry cards, media/model filters, search, readiness sorting, and detail previews.
+- Prompt Pool API and shared contracts for loading bundled data from `prompt-pool-data` or an override `PROMPT_POOL_DIR`.
+- Prompt favorites with local groups, bookmark actions, copy/use flows, usage metadata, and a floating quick-access panel on the canvas.
+- Docker support for bundling Prompt Pool JSON data into the runtime image.
+
+### Changed
+
+- Canvas navigation now includes Prompt Pool alongside Canvas and Gallery, with prompt reuse filling generation settings from the selected pool item.
+- Prompt Pool browsing now auto-loads more cards near the scroll end and keeps long favorite prompts readable in a viewport-aware tooltip.
+- Bundled Prompt Pool data was refreshed to 2,968 prompts and 5,365 referenced assets.
+
 ## v0.3.0 - 2026-05-05
 
 Agent canvas generation release.

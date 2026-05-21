@@ -85,6 +85,7 @@ You can also open the top-right `配置` dialog and save one local OpenAI-compat
 
 - `/` is the credential-aware homepage. It offers `Codex 登录` and `接入 API` when no provider is available.
 - `/canvas` is the working canvas. Without a provider, it redirects back to `/`.
+- `/pool` is the bundled Prompt Pool for browsing, searching, favoriting, copying, and reusing curated prompts.
 - `/gallery` remains available even without credentials, so local work can still be viewed.
 
 Environment values are read-only in the provider dialog. If you change `.env`, restart the API or Docker container.
@@ -202,7 +203,7 @@ docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-The default image is `ghcr.io/mrslimslim/gpt-image-canvas:latest`. To pin a release, set `IMAGE` before running Compose, for example `ghcr.io/mrslimslim/gpt-image-canvas:v0.3.0`.
+The default image is `ghcr.io/mrslimslim/gpt-image-canvas:latest`. To pin a release, set `IMAGE` before running Compose, for example `ghcr.io/mrslimslim/gpt-image-canvas:v0.4.0`.
 
 Release tags are published as `vX.Y.Z`, `X.Y.Z`, and `X.Y`; non-prerelease GitHub Releases also update `latest`. Public GHCR packages can be pulled anonymously. If GitHub shows the package as private, run `docker login ghcr.io` or make the package public in the repository package settings.
 

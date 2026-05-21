@@ -1,5 +1,4 @@
 import {
-  ArrowRight,
   Bookmark,
   BookmarkCheck,
   CheckCircle2,
@@ -53,6 +52,7 @@ type PromptPoolColumnItem = {
 
 const INITIAL_VISIBLE_COUNT = 72;
 const LOAD_MORE_COUNT = 72;
+const AUTO_LOAD_SCROLL_THRESHOLD = 720;
 const PRIORITY_IMAGE_COUNT = 24;
 
 export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
@@ -77,6 +77,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   const [lastFavoriteToastSourceId, setLastFavoriteToastSourceId] = useState<string | null>(null);
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameGroupDraft, setRenameGroupDraft] = useState("");
+  const scrollRootRef = useRef<HTMLElement | null>(null);
   const copiedTimerRef = useRef<number | undefined>();
   const statusTimerRef = useRef<number | undefined>();
   const favoriteSparkTimerRef = useRef<number | undefined>();
@@ -175,6 +176,42 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   const favoriteBySourceId = useMemo(() => new Map(favoriteItems.map((favorite) => [favorite.sourceId, favorite])), [favoriteItems]);
   const favoritePopoverItem = favoritePopoverSourceId ? items.find((item) => item.id === favoritePopoverSourceId) ?? null : null;
   const favoritePopoverFavorite = favoritePopoverSourceId ? favoriteBySourceId.get(favoritePopoverSourceId) ?? null : null;
+
+  useEffect(() => {
+    const scrollRoot = scrollRootRef.current;
+    if (!scrollRoot || !hasMoreItems) {
+      return;
+    }
+
+    let animationFrameId = 0;
+
+    const loadMoreIfNearEnd = (): void => {
+      if (animationFrameId) {
+        return;
+      }
+
+      animationFrameId = window.requestAnimationFrame(() => {
+        animationFrameId = 0;
+        const distanceToEnd = scrollRoot.scrollHeight - scrollRoot.scrollTop - scrollRoot.clientHeight;
+
+        if (distanceToEnd <= AUTO_LOAD_SCROLL_THRESHOLD) {
+          setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, filteredItems.length));
+        }
+      });
+    };
+
+    loadMoreIfNearEnd();
+    scrollRoot.addEventListener("scroll", loadMoreIfNearEnd, { passive: true });
+    window.addEventListener("resize", loadMoreIfNearEnd);
+
+    return () => {
+      if (animationFrameId) {
+        window.cancelAnimationFrame(animationFrameId);
+      }
+      scrollRoot.removeEventListener("scroll", loadMoreIfNearEnd);
+      window.removeEventListener("resize", loadMoreIfNearEnd);
+    };
+  }, [filteredItems.length, hasMoreItems, visibleCount]);
 
   function showStatus(message: string, favoriteSourceId?: string): void {
     window.clearTimeout(statusTimerRef.current);
@@ -325,7 +362,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
   }
 
   return (
-    <main className="pool-page app-view" data-testid="pool-page">
+    <main className="pool-page app-view" data-testid="pool-page" ref={scrollRootRef}>
       <div className="pool-page__inner">
         <header className="pool-header">
           <div className="pool-header__copy">
@@ -461,12 +498,7 @@ export function PromptPoolPage({ onUsePrompt }: PromptPoolPageProps) {
               ))}
             </div>
 
-            {hasMoreItems ? (
-              <button className="pool-load-more" type="button" onClick={() => setVisibleCount((current) => current + LOAD_MORE_COUNT)}>
-                {t("poolLoadMore", { count: Math.min(LOAD_MORE_COUNT, filteredItems.length - visibleCount) })}
-                <ArrowRight className="size-4" aria-hidden="true" />
-              </button>
-            ) : null}
+            {hasMoreItems ? <div className="pool-scroll-buffer" aria-hidden="true" /> : null}
           </>
         )}
       </div>

@@ -85,6 +85,7 @@ CODEX_RESPONSES_MODEL=gpt-5.5
 
 - `/` 是凭据感知首页。没有 provider 时会提供 `Codex 登录` 和 `接入 API`。
 - `/canvas` 是画布工作区。没有 provider 时会返回 `/`。
+- `/pool` 是内置提示池，用于浏览、搜索、收藏、复制和复用精选提示词。
 - `/gallery` 始终可访问，方便在没有凭证时查看本地作品。
 
 Provider 弹窗中的环境变量是只读的。修改 `.env` 后，需要重启 API 或 Docker 容器。
@@ -200,7 +201,7 @@ docker compose -f docker-compose.ghcr.yml pull
 docker compose -f docker-compose.ghcr.yml up -d
 ```
 
-默认镜像是 `ghcr.io/mrslimslim/gpt-image-canvas:latest`。如需固定某个版本，请在运行 Compose 前设置 `IMAGE`，例如 `ghcr.io/mrslimslim/gpt-image-canvas:v0.3.0`。
+默认镜像是 `ghcr.io/mrslimslim/gpt-image-canvas:latest`。如需固定某个版本，请在运行 Compose 前设置 `IMAGE`，例如 `ghcr.io/mrslimslim/gpt-image-canvas:v0.4.0`。
 
 发布标签会生成 `vX.Y.Z`、`X.Y.Z` 和 `X.Y` 镜像标签；非 prerelease 的 GitHub Release 还会更新 `latest`。公开 GHCR package 可以匿名拉取；如果 GitHub 显示 package 是私有的，请先运行 `docker login ghcr.io`，或在仓库 package 设置里改为公开。
 

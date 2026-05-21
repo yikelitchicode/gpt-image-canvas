@@ -31,7 +31,7 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import {
   DefaultSnapIndicator,
@@ -2951,6 +2951,17 @@ function ProviderStatusPopover({
   );
 }
 
+type PromptFavoriteTooltip = {
+  arrowLeft: number;
+  id: string;
+  maxHeight: number;
+  placement: "above" | "below";
+  prompt: string;
+  left: number;
+  top: number;
+  width: number;
+};
+
 function PromptFavoritesFloatingPanel({
   activeGroupId,
   copiedFavoriteId,
@@ -2988,6 +2999,74 @@ function PromptFavoritesFloatingPanel({
   onUse: (favorite: PromptFavoriteItem) => void;
   t: Translate;
 }) {
+  const [promptTooltip, setPromptTooltip] = useState<PromptFavoriteTooltip | null>(null);
+  const tooltipHideTimeoutRef = useRef<number | null>(null);
+
+  const clearTooltipHideTimeout = useCallback(() => {
+    if (tooltipHideTimeoutRef.current !== null) {
+      window.clearTimeout(tooltipHideTimeoutRef.current);
+      tooltipHideTimeoutRef.current = null;
+    }
+  }, []);
+
+  const hidePromptTooltip = useCallback(() => {
+    clearTooltipHideTimeout();
+    setPromptTooltip(null);
+  }, [clearTooltipHideTimeout]);
+
+  const schedulePromptTooltipHide = useCallback(() => {
+    clearTooltipHideTimeout();
+    tooltipHideTimeoutRef.current = window.setTimeout(() => {
+      setPromptTooltip(null);
+      tooltipHideTimeoutRef.current = null;
+    }, 120);
+  }, [clearTooltipHideTimeout]);
+
+  const showPromptTooltip = useCallback(
+    (favorite: PromptFavoriteItem, target: HTMLElement) => {
+      clearTooltipHideTimeout();
+
+      const rect = target.getBoundingClientRect();
+      const listRect = target.closest(".prompt-favorites-panel__list")?.getBoundingClientRect();
+      const margin = 12;
+      const gap = 8;
+      const boundaryLeft = Math.max(margin, (listRect?.left ?? 0) + gap);
+      const boundaryRight = Math.min(window.innerWidth - margin, (listRect?.right ?? window.innerWidth) - gap);
+      const width = Math.min(isMobile ? 300 : 360, window.innerWidth - margin * 2, Math.max(220, boundaryRight - boundaryLeft));
+      const left = Math.min(Math.max(rect.left, boundaryLeft), boundaryRight - width);
+      const arrowLeft = Math.min(Math.max(rect.left + rect.width / 2 - left, 16), width - 16);
+      const listTop = Math.max(margin, (listRect?.top ?? 0) + gap);
+      const belowTop = rect.bottom + gap;
+      const belowSpace = window.innerHeight - belowTop - margin;
+      const aboveSpace = rect.top - listTop - gap;
+      const placement: PromptFavoriteTooltip["placement"] =
+        belowSpace >= 132 || belowSpace >= aboveSpace ? "below" : "above";
+      const availableHeight = Math.max(88, placement === "below" ? belowSpace : aboveSpace);
+      const maxHeight = Math.min(isMobile ? 188 : 224, availableHeight);
+      const top = placement === "below" ? belowTop : Math.max(listTop, rect.top - maxHeight - gap);
+
+      setPromptTooltip({
+        arrowLeft,
+        id: favorite.id,
+        left,
+        maxHeight,
+        placement,
+        prompt: favorite.prompt,
+        top,
+        width
+      });
+    },
+    [clearTooltipHideTimeout, isMobile]
+  );
+
+  useEffect(() => clearTooltipHideTimeout, [clearTooltipHideTimeout]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      hidePromptTooltip();
+    }
+  }, [hidePromptTooltip, isOpen]);
+
   return (
     <div
       className="prompt-favorites-float"
@@ -3055,7 +3134,7 @@ function PromptFavoritesFloatingPanel({
           </div>
 
           {favorites.length > 0 ? (
-            <div className="prompt-favorites-panel__list">
+            <div className="prompt-favorites-panel__list" onScroll={hidePromptTooltip}>
               {favorites.map((favorite) => {
                 const copied = copiedFavoriteId === favorite.id;
                 const copyLabel = copied ? t("agentCopiedMessage") : t("commonCopy");
@@ -3064,13 +3143,18 @@ function PromptFavoritesFloatingPanel({
                     <div className="prompt-favorites-item__media">
                       <img alt="" loading="lazy" src={favorite.assetUrl} />
                     </div>
-                    <div className="prompt-favorites-item__body" title={favorite.prompt}>
+                    <div
+                      className="prompt-favorites-item__body"
+                      tabIndex={0}
+                      aria-describedby={promptTooltip?.id === favorite.id ? "prompt-favorites-tooltip" : undefined}
+                      onBlur={schedulePromptTooltipHide}
+                      onFocus={(event) => showPromptTooltip(favorite, event.currentTarget)}
+                      onPointerEnter={(event) => showPromptTooltip(favorite, event.currentTarget)}
+                      onPointerLeave={schedulePromptTooltipHide}
+                    >
                       <h3>{favorite.title}</h3>
                       <p>{promptExcerpt(favorite.prompt)}</p>
                       <span>{promptFavoriteMeta(favorite, t)}</span>
-                      <div className="prompt-favorites-item__preview" aria-hidden="true">
-                        {favorite.prompt}
-                      </div>
                     </div>
                     <div className="prompt-favorites-item__actions">
                       <button className="primary-action prompt-favorites-item__use" type="button" onClick={() => onUse(favorite)}>
@@ -3110,6 +3194,29 @@ function PromptFavoritesFloatingPanel({
           )}
         </section>
       ) : null}
+
+      {promptTooltip
+        ? createPortal(
+            <div
+              className="prompt-favorites-tooltip"
+              data-placement={promptTooltip.placement}
+              id="prompt-favorites-tooltip"
+              role="tooltip"
+              style={{
+                "--tooltip-arrow-left": `${promptTooltip.arrowLeft}px`,
+                left: promptTooltip.left,
+                maxHeight: promptTooltip.maxHeight,
+                top: promptTooltip.top,
+                width: promptTooltip.width
+              } as CSSProperties}
+              onPointerEnter={clearTooltipHideTimeout}
+              onPointerLeave={schedulePromptTooltipHide}
+            >
+              {promptTooltip.prompt}
+            </div>,
+            document.body
+          )
+        : null}
 
       <button
         aria-controls="prompt-favorites-panel"
