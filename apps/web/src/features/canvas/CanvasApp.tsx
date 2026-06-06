@@ -154,6 +154,9 @@ const AGENT_TRACE_DEBUG_ENABLED = import.meta.env.VITE_AGENT_TRACE_DEBUG !== "fa
 const HISTORY_COLLAPSED_LIMIT = 3;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const MOBILE_DRAWER_MEDIA_QUERY = "(max-width: 1023px)";
+const PROMPT_POOL_CANVAS_HANDOFF_QUERY_PARAM = "poolPromptHandoff";
+const PROMPT_POOL_CANVAS_HANDOFF_STORAGE_PREFIX = "gpt-image-canvas.prompt-pool-handoff.";
+const PROMPT_POOL_CANVAS_HANDOFF_TTL_MS = 5 * 60 * 1000;
 const ASSET_PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 type AssetPreviewWidth = (typeof ASSET_PREVIEW_WIDTHS)[number];
 const GENERATED_ASSET_INITIAL_PREVIEW_WIDTH: AssetPreviewWidth = 2048;
@@ -362,6 +365,11 @@ type AppRoute = "home" | "canvas" | "pool" | "gallery";
 type SaveStatus = "loading" | "saved" | "pending" | "saving" | "error";
 type GenerationMode = "text" | "reference";
 type PanelTab = "manual" | "agent";
+type PromptPoolCanvasHandoffItem = Pick<PromptPoolItem, "aspectRatio" | "id" | "imageHeight" | "imageWidth" | "mediaType" | "prompt">;
+type PromptPoolCanvasHandoff = {
+  createdAt: number;
+  item: PromptPoolCanvasHandoffItem;
+};
 type PanelStatusTone = "progress" | "success" | "warning" | "error";
 type CodexLoginStatus = "idle" | "starting" | "pending" | "authorized" | "expired" | "denied" | "error";
 type AgentRunStatus = "idle" | "connecting" | "running";
@@ -691,6 +699,99 @@ function pathForRoute(route: AppRoute): string {
   return route === "gallery" ? "/gallery" : "/";
 }
 
+function promptPoolCanvasHandoffStorageKey(token: string): string {
+  return `${PROMPT_POOL_CANVAS_HANDOFF_STORAGE_PREFIX}${token}`;
+}
+
+function createPromptPoolCanvasHandoffToken(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isPromptPoolCanvasHandoff(value: unknown): value is PromptPoolCanvasHandoff {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const handoff = value as Partial<PromptPoolCanvasHandoff>;
+  const item = handoff.item as Partial<PromptPoolCanvasHandoffItem> | undefined;
+  return (
+    typeof handoff.createdAt === "number" &&
+    typeof item?.id === "string" &&
+    typeof item?.prompt === "string" &&
+    (item?.mediaType === "image" || item?.mediaType === "video")
+  );
+}
+
+function writePromptPoolCanvasHandoff(item: PromptPoolItem): string | null {
+  const token = createPromptPoolCanvasHandoffToken();
+  const handoff: PromptPoolCanvasHandoff = {
+    createdAt: Date.now(),
+    item: {
+      aspectRatio: item.aspectRatio,
+      id: item.id,
+      imageHeight: item.imageHeight,
+      imageWidth: item.imageWidth,
+      mediaType: item.mediaType,
+      prompt: item.prompt
+    }
+  };
+
+  try {
+    window.localStorage.setItem(promptPoolCanvasHandoffStorageKey(token), JSON.stringify(handoff));
+    return token;
+  } catch {
+    return null;
+  }
+}
+
+function createPromptPoolCanvasHandoffUrl(item: PromptPoolItem): string | null {
+  const token = writePromptPoolCanvasHandoff(item);
+  if (!token) {
+    return null;
+  }
+
+  const url = new URL("/canvas", window.location.origin);
+  url.searchParams.set(PROMPT_POOL_CANVAS_HANDOFF_QUERY_PARAM, token);
+  return url.toString();
+}
+
+function clearPromptPoolCanvasHandoffUrl(url: URL): void {
+  url.searchParams.delete(PROMPT_POOL_CANVAS_HANDOFF_QUERY_PARAM);
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function consumePromptPoolCanvasHandoffFromLocation(): PromptPoolCanvasHandoffItem | null {
+  const url = new URL(window.location.href);
+  const token = url.searchParams.get(PROMPT_POOL_CANVAS_HANDOFF_QUERY_PARAM);
+  if (!token) {
+    return null;
+  }
+
+  clearPromptPoolCanvasHandoffUrl(url);
+
+  try {
+    const storageKey = promptPoolCanvasHandoffStorageKey(token);
+    const rawHandoff = window.localStorage.getItem(storageKey);
+    window.localStorage.removeItem(storageKey);
+    if (!rawHandoff) {
+      return null;
+    }
+
+    const handoff = JSON.parse(rawHandoff) as unknown;
+    if (!isPromptPoolCanvasHandoff(handoff) || Date.now() - handoff.createdAt > PROMPT_POOL_CANVAS_HANDOFF_TTL_MS) {
+      return null;
+    }
+
+    return handoff.item;
+  } catch {
+    return null;
+  }
+}
+
 function isPersistedSnapshot(value: unknown): value is PersistedSnapshot {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -844,10 +945,6 @@ function promptLikeSizePreset(item: {
 
     return best;
   }, DEFAULT_SIZE_PRESET);
-}
-
-function promptPoolSizePreset(item: PromptPoolItem): SizePreset {
-  return promptLikeSizePreset(item);
 }
 
 function promptFavoriteSizePreset(item: PromptFavoriteItem): SizePreset {
@@ -3848,6 +3945,28 @@ export function App() {
     setRoute(nextRoute);
   }, []);
 
+  const applyPromptPoolPromptToManualPanel = useCallback(
+    (item: PromptPoolCanvasHandoffItem): void => {
+      const nextPreset = promptLikeSizePreset(item);
+
+      setPrompt(item.prompt);
+      setStylePreset("none");
+      setSizePresetId(nextPreset.id);
+      setWidth(nextPreset.width);
+      setHeight(nextPreset.height);
+      setQuality(DEFAULT_IMAGE_QUALITY);
+      setOutputFormat("png");
+      setCount(1);
+      setGenerationMode("text");
+      setPanelTab("manual");
+      setGenerationError("");
+      setGenerationWarning("");
+      setGenerationMessage(t("generationPoolReused"));
+      setIsAiPanelOpen(true);
+    },
+    [t]
+  );
+
   const visibleHistory = useMemo(
     () => (isHistoryExpanded ? generationHistory : generationHistory.slice(0, HISTORY_COLLAPSED_LIMIT)),
     [generationHistory, isHistoryExpanded]
@@ -4012,6 +4131,16 @@ export function App() {
       window.removeEventListener("popstate", updateRoute);
     };
   }, []);
+
+  useEffect(() => {
+    const handoffItem = consumePromptPoolCanvasHandoffFromLocation();
+    if (!handoffItem) {
+      return;
+    }
+
+    applyPromptPoolPromptToManualPanel(handoffItem);
+    navigateToRoute("canvas", { replace: true });
+  }, [applyPromptPoolPromptToManualPanel, navigateToRoute]);
 
   useEffect(() => {
     return () => {
@@ -5222,25 +5351,8 @@ export function App() {
     }
   }
 
-  function reusePromptPoolItem(item: PromptPoolItem): void {
-    const nextPreset = promptPoolSizePreset(item);
-
-    setPrompt(item.prompt);
-    setStylePreset("none");
-    setSizePresetId(nextPreset.id);
-    setWidth(nextPreset.width);
-    setHeight(nextPreset.height);
-    setQuality(DEFAULT_IMAGE_QUALITY);
-    setOutputFormat("png");
-    setCount(1);
-    setGenerationMode("text");
-    setGenerationError("");
-    setGenerationWarning("");
-    setGenerationMessage(t("generationPoolReused"));
-    navigateToRoute("canvas");
-    if (isMobileDrawer) {
-      setIsAiPanelOpen(true);
-    }
+  function reusePromptPoolItem(item: PromptPoolItem): string | null {
+    return createPromptPoolCanvasHandoffUrl(item);
   }
 
   async function loadPromptFavoriteState(signal?: AbortSignal): Promise<void> {
