@@ -36,7 +36,7 @@ import {
 } from "../../infrastructure/storage/asset-storage.js";
 import { getManagedRuntimePaths } from "../../infrastructure/runtime.js";
 import { assets, generationOutputs, generationRecords, generationReferenceAssets } from "../../infrastructure/schema.js";
-import { getActiveCloudStorageConfig } from "../storage/storage-config.js";
+import { getActiveCloudStorageConfig, isPrimaryCloudStorageEnabled } from "../storage/storage-config.js";
 import { requireManagedUser } from "../../server/auth-context.js";
 
 const BATCH_CONCURRENCY = 2;
@@ -312,7 +312,16 @@ export async function saveReferenceImageInput(input: ReferenceImageInput): Promi
   const filePath = resolve(paths.assetsDir, relativePath);
   const createdAt = new Date().toISOString();
 
-  await localAssetStorage.putObject({ filePath, bytes: parsed.bytes });
+  const cloudStorage = await saveAssetToConfiguredCloud({
+    fileName,
+    bytes: parsed.bytes,
+    mimeType: parsed.mimeType,
+    createdAt
+  });
+  ensurePrimaryStorageSucceeded(cloudStorage);
+  if (!isPrimaryCloudStorageEnabled()) {
+    await localAssetStorage.putObject({ filePath, bytes: parsed.bytes });
+  }
   db.insert(assets)
     .values({
       id: assetId,
@@ -322,6 +331,17 @@ export async function saveReferenceImageInput(input: ReferenceImageInput): Promi
       mimeType: parsed.mimeType,
       width: imageSize.width,
       height: imageSize.height,
+      cloudProvider: cloudStorage?.provider ?? null,
+      cloudBucket: cloudStorage?.bucket ?? null,
+      cloudRegion: cloudStorage?.region ?? null,
+      cloudObjectKey: cloudStorage?.objectKey ?? null,
+      cloudStatus: cloudStorage?.status ?? null,
+      cloudError: cloudStorage?.error ?? null,
+      cloudUploadedAt: cloudStorage?.uploadedAt ?? null,
+      cloudEtag: cloudStorage?.etag ?? null,
+      cloudRequestId: cloudStorage?.requestId ?? null,
+      cloudEndpoint: cloudStorage?.endpoint ?? null,
+      cloudForcePathStyle: cloudStorage?.provider === "s3" ? (cloudStorage.forcePathStyle ? 1 : 0) : null,
       createdAt
     })
     .run();
@@ -400,7 +420,9 @@ export async function readStoredAsset(assetId: string): Promise<{ file: StoredAs
       return undefined;
     }
 
-    void localAssetStorage.putObject({ filePath: file.filePath, bytes }).catch(() => undefined);
+    if (!isPrimaryCloudStorageEnabled()) {
+      void localAssetStorage.putObject({ filePath: file.filePath, bytes }).catch(() => undefined);
+    }
     return {
       file,
       bytes
@@ -528,13 +550,16 @@ async function saveProviderImage(image: ProviderImage, input: ImageProviderInput
     throw new ProviderError("unsupported_provider_behavior", "Generated image dimensions could not be read.", 502);
   }
 
-  await localAssetStorage.putObject({ filePath, bytes });
   const cloudStorage = await saveAssetToConfiguredCloud({
     fileName,
     bytes,
     mimeType,
     createdAt: new Date().toISOString()
   });
+  ensurePrimaryStorageSucceeded(cloudStorage);
+  if (!isPrimaryCloudStorageEnabled()) {
+    await localAssetStorage.putObject({ filePath, bytes });
+  }
 
   return {
     asset: {
@@ -992,6 +1017,16 @@ async function saveAssetToConfiguredCloud(input: {
       error: storageErrorMessage(error)
     };
   }
+}
+
+function ensurePrimaryStorageSucceeded(storage: AssetCloudStorageRecord | undefined): void {
+  if (!isPrimaryCloudStorageEnabled()) {
+    return;
+  }
+  if (storage?.status === "uploaded") {
+    return;
+  }
+  throw new ProviderError("upstream_failure", storage?.error || "Image storage is unavailable.", 502);
 }
 
 async function readCloudAsset(location: StoredCloudAssetLocation | undefined): Promise<Buffer | undefined> {

@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import sharp from "sharp";
 import { readStoredAsset } from "../generation/image-generation.js";
 import { getManagedRuntimePaths } from "../../infrastructure/runtime.js";
+import { isPrimaryCloudStorageEnabled } from "../storage/storage-config.js";
 
 const PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 const MAX_PREVIEW_WIDTH = PREVIEW_WIDTHS[PREVIEW_WIDTHS.length - 1];
@@ -63,12 +64,14 @@ export async function readStoredAssetPreview(assetId: string, width: number): Pr
   }
 
   const previewPath = resolvePreviewPath(asset.file.id, width);
-  const cached = await readCachedPreview(previewPath);
-  if (cached) {
-    return {
-      bytes: cached,
-      width
-    };
+  if (!isPrimaryCloudStorageEnabled()) {
+    const cached = await readCachedPreview(previewPath);
+    if (cached) {
+      return {
+        bytes: cached,
+        width
+      };
+    }
   }
 
   const bytes = await sharp(asset.bytes)
@@ -83,7 +86,9 @@ export async function readStoredAssetPreview(assetId: string, width: number): Pr
     })
     .toBuffer();
 
-  await writeFile(previewPath, bytes);
+  if (!isPrimaryCloudStorageEnabled()) {
+    await writeFile(previewPath, bytes);
+  }
 
   return {
     bytes,

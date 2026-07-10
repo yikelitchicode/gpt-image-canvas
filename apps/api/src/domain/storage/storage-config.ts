@@ -22,6 +22,12 @@ const DEFAULT_S3_CUSTOM_ENDPOINT = process.env.S3_DEFAULT_ENDPOINT?.trim() || ""
 const DEFAULT_S3_ENDPOINT = DEFAULT_S3_CUSTOM_ENDPOINT || buildR2Endpoint(DEFAULT_S3_ACCOUNT_ID);
 const DEFAULT_S3_ENDPOINT_MODE: S3EndpointMode = DEFAULT_S3_CUSTOM_ENDPOINT ? "custom" : "r2-account";
 const STORAGE_PROVIDERS = ["cos", "s3"] as const satisfies readonly CloudStorageProvider[];
+const MANAGED_R2_ACCESS_KEY_ID = process.env.MANAGED_R2_ACCESS_KEY_ID?.trim() || "";
+const MANAGED_R2_SECRET_ACCESS_KEY = process.env.MANAGED_R2_SECRET_ACCESS_KEY?.trim() || "";
+const MANAGED_R2_BUCKET = process.env.MANAGED_R2_BUCKET?.trim() || "";
+const MANAGED_R2_ENDPOINT = process.env.MANAGED_R2_ENDPOINT?.trim() || "";
+const MANAGED_R2_KEY_PREFIX = process.env.MANAGED_R2_KEY_PREFIX?.trim() || "image-canvas/assets";
+const MANAGED_R2_PRIMARY_STORAGE = process.env.MANAGED_R2_PRIMARY_STORAGE === "true";
 
 type StorageConfigRow = typeof storageConfigs.$inferSelect;
 type ResolvedS3StorageAdapterConfig = S3StorageAdapterConfig & {
@@ -44,6 +50,11 @@ export function getStorageConfig(): StorageConfigResponse {
 }
 
 export function getActiveCloudStorageConfig(): ActiveCloudStorageConfig | undefined {
+  const managedR2 = managedR2Config();
+  if (managedR2) {
+    return { provider: "s3", config: managedR2 };
+  }
+
   const row = getPreferredStorageConfigRow();
   if (!row || row.enabled !== 1 || !isStorageProvider(row.provider)) {
     return undefined;
@@ -56,6 +67,26 @@ export function getActiveCloudStorageConfig(): ActiveCloudStorageConfig | undefi
 
   const config = rowToS3AdapterConfig(row);
   return config ? { provider: "s3", config } : undefined;
+}
+
+export function isPrimaryCloudStorageEnabled(): boolean {
+  return MANAGED_R2_PRIMARY_STORAGE;
+}
+
+function managedR2Config(): S3StorageAdapterConfig | undefined {
+  if (!MANAGED_R2_ACCESS_KEY_ID || !MANAGED_R2_SECRET_ACCESS_KEY || !MANAGED_R2_BUCKET || !MANAGED_R2_ENDPOINT) {
+    return undefined;
+  }
+
+  return {
+    accessKeyId: MANAGED_R2_ACCESS_KEY_ID,
+    secretAccessKey: MANAGED_R2_SECRET_ACCESS_KEY,
+    bucket: MANAGED_R2_BUCKET,
+    region: "auto",
+    keyPrefix: normalizeKeyPrefix(MANAGED_R2_KEY_PREFIX),
+    endpoint: normalizeEndpoint(MANAGED_R2_ENDPOINT),
+    forcePathStyle: false
+  };
 }
 
 export async function saveStorageConfig(input: SaveStorageConfigRequest): Promise<StorageConfigResponse> {
