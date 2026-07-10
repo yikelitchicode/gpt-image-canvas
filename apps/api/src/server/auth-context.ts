@@ -5,6 +5,7 @@ export interface ManagedUserContext {
   email: string;
   displayName: string;
   apiKey: string;
+  role: "admin" | "user";
 }
 
 const authContext = new AsyncLocalStorage<ManagedUserContext>();

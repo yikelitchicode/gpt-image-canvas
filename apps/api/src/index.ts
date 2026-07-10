@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { serve } from "@hono/node-server";
 import { closeAllAgentSessions } from "./domain/agent/websocket-session.js";
 import { closeDatabase } from "./infrastructure/database.js";
+import { startRetentionScheduler, stopRetentionScheduler } from "./domain/storage/retention.js";
 import { serverConfig } from "./infrastructure/runtime.js";
 import { agentWebSocketServer, app } from "./server/app.js";
 
@@ -13,6 +14,7 @@ function isMainModule(): boolean {
 }
 
 if (isMainModule()) {
+  startRetentionScheduler();
   const server = serve(
     {
       fetch: app.fetch,
@@ -27,6 +29,7 @@ if (isMainModule()) {
 
   const shutdown = (): void => {
     closeAllAgentSessions("server_shutdown");
+    stopRetentionScheduler();
     agentWebSocketServer.close();
     closeDatabase();
     server.close();

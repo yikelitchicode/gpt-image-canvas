@@ -73,6 +73,7 @@ export interface SaveProviderConfigRequest {
 }
 
 export interface AuthStatusResponse {
+  role?: "admin" | "user";
   provider: RuntimeImageProvider;
   openaiConfigured: boolean;
   codex: CodexAuthSessionView;

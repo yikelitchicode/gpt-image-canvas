@@ -49,3 +49,9 @@
   background: #eefbf7;
   color: #0f5f58;
 }
+
+.retention-notice {
+  color: #64748b;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}

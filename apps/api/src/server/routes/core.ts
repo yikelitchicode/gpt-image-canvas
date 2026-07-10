@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import { GENERATION_COUNTS, IMAGE_QUALITIES, OUTPUT_FORMATS, SIZE_PRESETS, STYLE_PRESETS, type AppConfig } from "../../domain/contracts.js";
 import { getConfiguredImageModel } from "../../infrastructure/providers/image-provider.js";
+import { requireManagedUser } from "../auth-context.js";
 
 export function registerCoreRoutes(app: Hono): void {
   app.get("/api/health", (c) =>
@@ -25,6 +26,7 @@ export function registerCoreRoutes(app: Hono): void {
   });
 
   app.get("/api/auth/status", (c) => c.json({
+    role: requireManagedUser().role,
     provider: "openai",
     openaiConfigured: true,
     codex: { available: false },

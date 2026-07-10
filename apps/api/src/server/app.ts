@@ -10,6 +10,7 @@ import { registerGalleryRoutes } from "./routes/gallery.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerProjectRoutes } from "./routes/project.js";
 import { registerPromptPoolRoutes } from "./routes/prompt-pool.js";
+import { registerRetentionRoutes } from "./routes/retention.js";
 import { managedAuthMiddleware, managedPageAuthMiddleware, registerManagedAuthRoutes } from "./managed-auth.js";
 
 export const agentWebSocketServer = new WebSocketServer({ noServer: true });
@@ -33,6 +34,7 @@ export function createApp(): Hono {
   registerPromptPoolRoutes(app);
   registerAssetRoutes(app);
   registerImageRoutes(app);
+  registerRetentionRoutes(app);
 
   const webDistRoot = relative(process.cwd(), runtimePaths.webDistDir) || ".";
 

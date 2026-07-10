@@ -3407,12 +3407,14 @@ function TopNavigation({
   route,
   onNavigate,
   onPreloadGallery,
-  onPreloadPool
+  onPreloadPool,
+  isAdmin
 }: {
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
   onPreloadPool: () => void;
+  isAdmin: boolean;
 }) {
   const { t } = useI18n();
 
@@ -3427,6 +3429,7 @@ function TopNavigation({
           </div>
         </div>
         <div className="top-navigation__actions">
+          <span className="retention-notice">{t("retentionNotice")}</span>
           <nav aria-label={t("navMainAria")} className="top-navigation__links">
             <a
               aria-current={route === "canvas" ? "page" : undefined}
@@ -3476,6 +3479,7 @@ function TopNavigation({
             </a>
           </nav>
           <LanguageSwitcher />
+          {isAdmin ? <RetentionAdminButton /> : null}
           <a className="top-navigation__settings" href="https://chickendog.cc/dashboard">
             <ExternalLink className="size-4" aria-hidden="true" />
             <span>ChickenDog</span>
@@ -3484,6 +3488,51 @@ function TopNavigation({
       </div>
     </header>
   );
+}
+
+function RetentionAdminButton() {
+  const { t } = useI18n();
+  const [busy, setBusy] = useState(false);
+  const runCleanup = async () => {
+    setBusy(true);
+    try {
+      const statusResponse = await fetch("/api/admin/retention");
+      if (!statusResponse.ok) throw new Error(t("retentionAdminFailed"));
+      const status = await statusResponse.json() as { bytesUsed: number; objectCount: number; expiredObjectCount: number };
+      const message = t("retentionAdminConfirm", {
+        size: formatBytes(status.bytesUsed),
+        count: status.objectCount,
+        expired: status.expiredObjectCount
+      });
+      if (!window.confirm(message)) return;
+      const cleanupResponse = await fetch("/api/admin/retention/cleanup", { method: "POST" });
+      if (!cleanupResponse.ok) throw new Error(t("retentionAdminFailed"));
+      const result = await cleanupResponse.json() as { deleted: number; failed: number };
+      window.alert(t("retentionAdminDone", result));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : t("retentionAdminFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="top-navigation__settings" disabled={busy} title={t("retentionAdminTitle")} type="button" onClick={() => void runCleanup()}>
+      {busy ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="size-4" aria-hidden="true" />}
+      <span>{t("retentionAdminButton")}</span>
+    </button>
+  );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
 }
 
 function LanguageSwitcher() {
@@ -7106,6 +7155,7 @@ export function App() {
         onNavigate={navigateToRoute}
         onPreloadGallery={preloadGalleryPage}
         onPreloadPool={preloadPromptPoolPage}
+        isAdmin={authStatus?.role === "admin"}
       />
       {route === "home" ? (
         <HomePage

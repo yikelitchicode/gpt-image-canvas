@@ -91,7 +91,8 @@ export function registerManagedAuthRoutes(app: Hono): void {
       user: {
         id: session.userId,
         email: session.email,
-        displayName: session.displayName
+        displayName: session.displayName,
+        role: session.role
       }
     });
   });
@@ -157,7 +158,8 @@ async function provisionManagedUser(token: string): Promise<ManagedUserContext> 
     userId,
     email: stringField(profile, "email"),
     displayName: stringField(profile, "username") || stringField(profile, "name") || stringField(profile, "email"),
-    apiKey: key.key
+    apiKey: key.key,
+    role: stringField(profile, "role") === "admin" ? "admin" : "user"
   };
 }
 
