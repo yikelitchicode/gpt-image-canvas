@@ -40,12 +40,22 @@ import { getActiveCloudStorageConfig, isPrimaryCloudStorageEnabled } from "../st
 import { requireManagedUser } from "../../server/auth-context.js";
 
 const BATCH_CONCURRENCY = 2;
+const GLOBAL_GENERATION_CONCURRENCY = readGenerationConcurrency(process.env.IMAGE_GLOBAL_GENERATION_CONCURRENCY);
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
 const SUPPORTED_REFERENCE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
 const TRANSIENT_PROVIDER_RETRY_DELAYS_MS = [1500, 4000] as const;
 const INTERRUPTED_GENERATION_ERROR = "Generation was interrupted by an API restart. Rerun it from history.";
 const CANCELLED_GENERATION_ERROR = "This generation was cancelled.";
 const localAssetStorage = new LocalAssetStorageAdapter();
+let activeGenerationSlots = 0;
+const generationSlotQueue: GenerationSlotWaiter[] = [];
+
+interface GenerationSlotWaiter {
+  resolve: () => void;
+  reject: (error: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
 
 function ownerId(): string {
   return requireManagedUser().userId;
@@ -110,7 +120,7 @@ export async function runTextToImageGeneration(input: ImageProviderInput, provid
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => generateSingleOutput(input, provider, signal)
+    async () => withGlobalGenerationSlot(() => generateSingleOutput(input, provider, signal), signal)
   );
 
   const record = saveCompletedGenerationRecord(
@@ -142,7 +152,7 @@ export async function runReferenceImageGeneration(
   const outputs = await mapWithConcurrency(
     Array.from({ length: inputWithReferenceAssets.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => editSingleOutput(inputWithReferenceAssets, provider, signal)
+    async () => withGlobalGenerationSlot(() => editSingleOutput(inputWithReferenceAssets, provider, signal), signal)
   );
 
   const record = saveCompletedGenerationRecord(
@@ -194,7 +204,7 @@ export async function finishTextToImageGeneration(
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => generateSingleOutput(input, provider, signal)
+    async () => withGlobalGenerationSlot(() => generateSingleOutput(input, provider, signal), signal)
   );
   throwIfAborted(signal);
 
@@ -217,7 +227,7 @@ export async function finishReferenceImageGeneration(
   const outputs = await mapWithConcurrency(
     Array.from({ length: input.count }, (_, index) => index),
     BATCH_CONCURRENCY,
-    async () => editSingleOutput(input, provider, signal)
+    async () => withGlobalGenerationSlot(() => editSingleOutput(input, provider, signal), signal)
   );
   throwIfAborted(signal);
 
@@ -1121,6 +1131,49 @@ async function mapWithConcurrency<T, TResult>(
 
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
   return results;
+}
+
+async function withGlobalGenerationSlot<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  await acquireGenerationSlot(signal);
+  try {
+    return await operation();
+  } finally {
+    releaseGenerationSlot();
+  }
+}
+
+async function acquireGenerationSlot(signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  if (activeGenerationSlots < GLOBAL_GENERATION_CONCURRENCY) {
+    activeGenerationSlots += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const waiter: GenerationSlotWaiter = { resolve, reject, signal };
+    waiter.onAbort = () => {
+      const index = generationSlotQueue.indexOf(waiter);
+      if (index >= 0) generationSlotQueue.splice(index, 1);
+      reject(new DOMException("Generation was cancelled while queued.", "AbortError"));
+    };
+    signal?.addEventListener("abort", waiter.onAbort, { once: true });
+    generationSlotQueue.push(waiter);
+  });
+}
+
+function releaseGenerationSlot(): void {
+  const next = generationSlotQueue.shift();
+  if (!next) {
+    activeGenerationSlots = Math.max(0, activeGenerationSlots - 1);
+    return;
+  }
+  if (next.onAbort) next.signal?.removeEventListener("abort", next.onAbort);
+  next.resolve();
+}
+
+function readGenerationConcurrency(value: string | undefined): number {
+  const parsed = Number.parseInt(value ?? "4", 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 16 ? parsed : 4;
 }
 
 async function callProviderWithRetry<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
