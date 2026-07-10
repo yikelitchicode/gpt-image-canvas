@@ -3,6 +3,7 @@ import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
   name: text("name").notNull(),
   snapshotJson: text("snapshot_json").notNull(),
   createdAt: text("created_at").notNull(),
@@ -11,6 +12,7 @@ export const projects = sqliteTable("projects", {
 
 export const assets = sqliteTable("assets", {
   id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
   fileName: text("file_name").notNull(),
   relativePath: text("relative_path").notNull(),
   mimeType: text("mime_type").notNull(),
@@ -141,6 +143,7 @@ export const codexOAuthTokens = sqliteTable("codex_oauth_tokens", {
 
 export const generationRecords = sqliteTable("generation_records", {
   id: text("id").primaryKey(),
+  ownerId: text("owner_id").notNull(),
   mode: text("mode").notNull(),
   prompt: text("prompt").notNull(),
   effectivePrompt: text("effective_prompt").notNull(),

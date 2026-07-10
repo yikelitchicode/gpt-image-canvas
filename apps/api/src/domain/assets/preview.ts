@@ -2,7 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import sharp from "sharp";
 import { readStoredAsset } from "../generation/image-generation.js";
-import { runtimePaths } from "../../infrastructure/runtime.js";
+import { getManagedRuntimePaths } from "../../infrastructure/runtime.js";
 
 const PREVIEW_WIDTHS = [256, 512, 1024, 2048] as const;
 const MAX_PREVIEW_WIDTH = PREVIEW_WIDTHS[PREVIEW_WIDTHS.length - 1];
@@ -100,8 +100,9 @@ async function readCachedPreview(filePath: string): Promise<Buffer | undefined> 
 }
 
 function resolvePreviewPath(assetId: string, width: number): string {
-  const filePath = resolve(runtimePaths.assetPreviewsDir, `${safeFileSegment(assetId)}-${width}.webp`);
-  if (!isInsideDirectory(filePath, runtimePaths.assetPreviewsDir)) {
+  const previewDir = getManagedRuntimePaths().assetPreviewsDir;
+  const filePath = resolve(previewDir, `${safeFileSegment(assetId)}-${width}.webp`);
+  if (!isInsideDirectory(filePath, previewDir)) {
     throw new Error("Invalid preview cache path.");
   }
 

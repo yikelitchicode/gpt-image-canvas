@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotEnv } from "dotenv";
+import { requireManagedUser } from "../server/auth-context.js";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(moduleDir, "../..");
@@ -69,6 +70,28 @@ export const runtimePaths = {
   promptPoolDir: resolveFromRepo(optionalEnvPath(process.env.PROMPT_POOL_DIR) ?? defaultPromptPoolDir()),
   webDistDir: resolve(repoRoot, "apps/web/dist")
 };
+
+export interface ManagedRuntimePaths {
+  dataDir: string;
+  assetsDir: string;
+  assetPreviewsDir: string;
+  projectSnapshotBackupsDir: string;
+}
+
+export function getManagedRuntimePaths(): ManagedRuntimePaths {
+  const userId = requireManagedUser().userId.replace(/[^a-zA-Z0-9_-]/gu, "_");
+  const userDataDir = resolve(runtimePaths.dataDir, "users", userId);
+  const paths = {
+    dataDir: userDataDir,
+    assetsDir: resolve(userDataDir, "assets"),
+    assetPreviewsDir: resolve(userDataDir, "asset-previews"),
+    projectSnapshotBackupsDir: resolve(userDataDir, "project-snapshot-backups")
+  };
+  mkdirSync(paths.assetsDir, { recursive: true });
+  mkdirSync(paths.assetPreviewsDir, { recursive: true });
+  mkdirSync(paths.projectSnapshotBackupsDir, { recursive: true });
+  return paths;
+}
 
 export const serverConfig = {
   host: process.env.HOST ?? "127.0.0.1",

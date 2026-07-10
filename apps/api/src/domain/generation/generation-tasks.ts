@@ -11,9 +11,11 @@ import {
   getGenerationRecord,
   markInterruptedGenerationRecordsFailed
 } from "./image-generation.js";
+import { requireManagedUser } from "../../server/auth-context.js";
 
 interface ActiveGenerationTask {
   controller: AbortController;
+  ownerId: string;
 }
 
 const activeGenerationTasks = new Map<string, ActiveGenerationTask>();
@@ -56,13 +58,16 @@ export function readGenerationTaskRecord(generationId: string): GenerationRecord
 }
 
 export function cancelGenerationTask(generationId: string): GenerationRecord | undefined {
-  activeGenerationTasks.get(generationId)?.controller.abort();
+  const task = activeGenerationTasks.get(generationId);
+  if (task?.ownerId === requireManagedUser().userId) {
+    task.controller.abort();
+  }
   return cancelGenerationRecord(generationId);
 }
 
 function startBackgroundGenerationTask(generationId: string, run: (signal: AbortSignal) => Promise<void>): void {
   const controller = new AbortController();
-  activeGenerationTasks.set(generationId, { controller });
+  activeGenerationTasks.set(generationId, { controller, ownerId: requireManagedUser().userId });
 
   void (async () => {
     try {

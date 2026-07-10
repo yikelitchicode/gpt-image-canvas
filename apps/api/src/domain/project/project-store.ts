@@ -16,8 +16,9 @@ import type {
   ProjectState
 } from "../contracts.js";
 import { db } from "../../infrastructure/database.js";
-import { runtimePaths } from "../../infrastructure/runtime.js";
+import { getManagedRuntimePaths } from "../../infrastructure/runtime.js";
 import { assets, generationOutputs, generationRecords, generationReferenceAssets, projects } from "../../infrastructure/schema.js";
+import { requireManagedUser } from "../../server/auth-context.js";
 
 export const DEFAULT_PROJECT_ID = "default";
 const DEFAULT_PROJECT_NAME = "Default Project";
@@ -89,6 +90,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function ownerId(): string {
+  return requireManagedUser().userId;
+}
+
+function defaultProjectId(): string {
+  return `${ownerId()}:${DEFAULT_PROJECT_ID}`;
+}
+
 function readPositiveIntegerEnv(name: string, fallback: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -122,7 +131,8 @@ function ensureDefaultProjectRow(options: EnsureDefaultProjectOptions): void {
   const createdAt = nowIso();
   db.insert(projects)
     .values({
-      id: DEFAULT_PROJECT_ID,
+      id: defaultProjectId(),
+      ownerId: ownerId(),
       name: DEFAULT_PROJECT_NAME,
       snapshotJson: "null",
       createdAt,
@@ -150,7 +160,7 @@ export function saveProjectSnapshot(input: ProjectSnapshotInput): ProjectState {
       snapshotJson: input.snapshotJson,
       updatedAt
     })
-    .where(eq(projects.id, DEFAULT_PROJECT_ID))
+    .where(and(eq(projects.id, defaultProjectId()), eq(projects.ownerId, ownerId())))
     .run();
 
   return getProjectState();
@@ -163,7 +173,7 @@ export function getProjectState(): ProjectState {
 
   if (!project) {
     return {
-      id: DEFAULT_PROJECT_ID,
+      id: defaultProjectId(),
       name: DEFAULT_PROJECT_NAME,
       snapshot: null,
       history: getGenerationHistory(),
@@ -190,7 +200,7 @@ export function getGalleryImages(): GalleryResponse {
     .from(generationOutputs)
     .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
     .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
-    .where(eq(generationOutputs.status, "succeeded"))
+    .where(and(eq(generationOutputs.status, "succeeded"), eq(generationRecords.ownerId, ownerId())))
     .orderBy(desc(generationOutputs.createdAt))
     .all();
 
@@ -215,6 +225,15 @@ export function getGalleryImages(): GalleryResponse {
 }
 
 export function deleteGalleryOutput(outputId: string): boolean {
+  const owned = db
+    .select({ id: generationOutputs.id })
+    .from(generationOutputs)
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
+    .where(and(eq(generationOutputs.id, outputId), eq(generationRecords.ownerId, ownerId())))
+    .get();
+  if (!owned) {
+    return false;
+  }
   const result = db.delete(generationOutputs).where(eq(generationOutputs.id, outputId)).run();
   return result.changes > 0;
 }
@@ -244,7 +263,12 @@ export function deleteGalleryOutputsByAssetIds(assetIds: string[]): string[] {
       outputId: generationOutputs.id
     })
     .from(generationOutputs)
-    .where(and(inArray(generationOutputs.assetId, assetIds), eq(generationOutputs.status, "succeeded")))
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
+    .where(and(
+      inArray(generationOutputs.assetId, assetIds),
+      eq(generationOutputs.status, "succeeded"),
+      eq(generationRecords.ownerId, ownerId())
+    ))
     .all();
 
   return deleteGalleryOutputs(rows.map((row) => row.outputId));
@@ -263,8 +287,14 @@ export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[
       mimeType: assets.mimeType
     })
     .from(generationOutputs)
+    .innerJoin(generationRecords, eq(generationOutputs.generationId, generationRecords.id))
     .innerJoin(assets, eq(generationOutputs.assetId, assets.id))
-    .where(and(inArray(generationOutputs.id, outputIds), eq(generationOutputs.status, "succeeded")))
+    .where(and(
+      inArray(generationOutputs.id, outputIds),
+      eq(generationOutputs.status, "succeeded"),
+      eq(generationRecords.ownerId, ownerId()),
+      eq(assets.ownerId, ownerId())
+    ))
     .all();
 
   const rowByOutputId = new Map(rows.map((row) => [row.outputId, row]));
@@ -276,7 +306,7 @@ export function getGalleryExportAssets(outputIds: string[]): GalleryExportAsset[
 
 function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
   try {
-    return db.select().from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+    return db.select().from(projects).where(and(eq(projects.id, defaultProjectId()), eq(projects.ownerId, ownerId()))).get();
   } catch (error) {
     throw new ProjectStoreUnavailableError("Saved project row could not be read.", error);
   }
@@ -284,7 +314,7 @@ function getDefaultProjectRow(): (typeof projects.$inferSelect) | undefined {
 
 function defaultProjectRowExists(): boolean {
   try {
-    const row = db.select({ id: projects.id }).from(projects).where(eq(projects.id, DEFAULT_PROJECT_ID)).get();
+    const row = db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, defaultProjectId()), eq(projects.ownerId, ownerId()))).get();
     return Boolean(row);
   } catch (error) {
     throw new ProjectStoreUnavailableError("Saved project row existence could not be checked.", error);
@@ -398,8 +428,9 @@ function writeProjectSnapshotBackup(snapshotJson: string, updatedAt: string): vo
   const hashPrefix = hash.slice(0, 16);
   const fileName = `${timestamp}-${hashPrefix}.json.gz`;
   const tempFileName = `.${fileName}.${process.pid}.tmp`;
-  const finalPath = join(runtimePaths.projectSnapshotBackupsDir, fileName);
-  const tempPath = join(runtimePaths.projectSnapshotBackupsDir, tempFileName);
+  const backupDir = getManagedRuntimePaths().projectSnapshotBackupsDir;
+  const finalPath = join(backupDir, fileName);
+  const tempPath = join(backupDir, tempFileName);
 
   writeFileSync(tempPath, gzipSync(snapshotJson));
   renameSync(tempPath, finalPath);
@@ -407,7 +438,7 @@ function writeProjectSnapshotBackup(snapshotJson: string, updatedAt: string): vo
 
 function backupExists(hash: string): boolean {
   const hashPrefix = hash.slice(0, 16);
-  return readdirSync(runtimePaths.projectSnapshotBackupsDir).some((fileName) =>
+  return readdirSync(getManagedRuntimePaths().projectSnapshotBackupsDir).some((fileName) =>
     fileName.endsWith(`${hashPrefix}.json.gz`)
   );
 }
@@ -442,13 +473,14 @@ function pruneProjectSnapshotBackups(): void {
 }
 
 function readProjectSnapshotBackups(): ProjectSnapshotBackupFile[] {
-  return readdirSync(runtimePaths.projectSnapshotBackupsDir)
+  const backupDir = getManagedRuntimePaths().projectSnapshotBackupsDir;
+  return readdirSync(backupDir)
     .flatMap((fileName): ProjectSnapshotBackupFile[] => {
       if (!fileName.endsWith(".json.gz")) {
         return [];
       }
 
-      const filePath = join(runtimePaths.projectSnapshotBackupsDir, fileName);
+      const filePath = join(backupDir, fileName);
       let stats: ReturnType<typeof statSync>;
       try {
         stats = statSync(filePath);
@@ -483,7 +515,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readGenerationHistory(): ApiGenerationRecord[] {
-  const records = db.select().from(generationRecords).orderBy(desc(generationRecords.createdAt)).limit(20).all();
+  const records = db
+    .select()
+    .from(generationRecords)
+    .where(eq(generationRecords.ownerId, ownerId()))
+    .orderBy(desc(generationRecords.createdAt))
+    .limit(20)
+    .all();
   if (records.length === 0) {
     return [];
   }
@@ -508,7 +546,9 @@ function readGenerationHistory(): ApiGenerationRecord[] {
 
   const assetIds = outputs.flatMap((output) => (output.assetId ? [output.assetId] : []));
   const assetRows =
-    assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+    assetIds.length > 0
+      ? db.select().from(assets).where(and(inArray(assets.id, assetIds), eq(assets.ownerId, ownerId()))).all()
+      : [];
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
 
   const outputsByGenerationId = new Map<string, typeof outputs>();

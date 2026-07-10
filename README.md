@@ -1,5 +1,12 @@
 # GPT Image Canvas
 
+> This fork is deployed by ChickenDog in managed multi-user mode. Authentication
+> starts on `chickendog.cc`, exchanges the main-site JWT for a one-time ticket,
+> and stores each user's canvas and assets under an isolated server-side owner.
+> Provider, Codex, Agent, and cloud-credential configuration are intentionally
+> disabled; image requests use the signed-in user's pay-as-you-go `image` group
+> API key through Sub2API.
+
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 Local AI image canvas for prompt-to-image generation, reference-image generation, and multi-step Agent planning. It combines tldraw, Hono, SQLite, and GPT Image 2 into a local-first creative workspace.

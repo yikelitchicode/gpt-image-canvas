@@ -53,6 +53,7 @@ function verifySqliteIntegrity(database: Database.Database): void {
 sqlite.exec(`
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL,
   name TEXT NOT NULL,
   snapshot_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE TABLE IF NOT EXISTS assets (
   id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL,
   file_name TEXT NOT NULL,
   relative_path TEXT NOT NULL,
   mime_type TEXT NOT NULL,
@@ -189,6 +191,7 @@ CREATE TABLE IF NOT EXISTS codex_oauth_tokens (
 
 CREATE TABLE IF NOT EXISTS generation_records (
   id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL,
   mode TEXT NOT NULL,
   prompt TEXT NOT NULL,
   effective_prompt TEXT NOT NULL,
@@ -231,6 +234,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS agent_skills_slug_idx ON agent_skills(slug);
 CREATE UNIQUE INDEX IF NOT EXISTS prompt_favorites_source_idx ON prompt_favorites(source_type, source_id);
 CREATE INDEX IF NOT EXISTS prompt_favorites_group_id_idx ON prompt_favorites(group_id);
 CREATE INDEX IF NOT EXISTS prompt_favorites_last_used_at_idx ON prompt_favorites(last_used_at);
+`);
+
+ensureColumn("projects", "owner_id", "owner_id TEXT NOT NULL DEFAULT 'legacy'");
+ensureColumn("assets", "owner_id", "owner_id TEXT NOT NULL DEFAULT 'legacy'");
+ensureColumn("generation_records", "owner_id", "owner_id TEXT NOT NULL DEFAULT 'legacy'");
+sqlite.exec(`
+CREATE INDEX IF NOT EXISTS projects_owner_id_idx ON projects(owner_id);
+CREATE INDEX IF NOT EXISTS assets_owner_id_idx ON assets(owner_id);
+CREATE INDEX IF NOT EXISTS generation_records_owner_id_created_at_idx ON generation_records(owner_id, created_at);
 `);
 
 ensureColumn("assets", "cloud_provider", "cloud_provider TEXT");

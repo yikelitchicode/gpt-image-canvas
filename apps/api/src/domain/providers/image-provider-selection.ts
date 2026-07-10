@@ -18,6 +18,8 @@ import {
   getProviderSourceOrder
 } from "./provider-config.js";
 import type { ProviderSourceId, RuntimeImageProvider } from "../contracts.js";
+import { getManagedUser } from "../../server/auth-context.js";
+import { parseOpenAIImageTimeoutMs } from "../../infrastructure/providers/image-provider.js";
 
 export interface ConfiguredImageProviderSelection {
   sourceId: ProviderSourceId;
@@ -53,6 +55,21 @@ export async function createConfiguredImageProvider(signal?: AbortSignal): Promi
 export async function selectConfiguredImageProviderSource(
   signal?: AbortSignal
 ): Promise<ConfiguredImageProviderSelection | undefined> {
+  const managedUser = getManagedUser();
+  if (managedUser) {
+    const baseURL = new URL("/v1", process.env.SUB2API_BASE_URL?.trim() || "http://127.0.0.1:8080").toString();
+    return {
+      sourceId: "env-openai",
+      provider: "openai",
+      openAIConfig: {
+        apiKey: managedUser.apiKey,
+        baseURL,
+        model: getConfiguredImageModel(),
+        timeoutMs: parseOpenAIImageTimeoutMs(process.env.OPENAI_IMAGE_TIMEOUT_MS)
+      }
+    };
+  }
+
   for (const sourceId of getProviderSourceOrder()) {
     if (sourceId === "env-openai") {
       const openAIConfig = getEnvironmentOpenAIImageProviderConfig();

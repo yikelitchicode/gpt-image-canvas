@@ -23,4 +23,54 @@ export function registerCoreRoutes(app: Hono): void {
 
     return c.json(config);
   });
+
+  app.get("/api/auth/status", (c) => c.json({
+    provider: "openai",
+    openaiConfigured: true,
+    codex: { available: false },
+    activeSource: {
+      id: "env-openai",
+      kind: "environment",
+      label: "ChickenDog Image API",
+      provider: "openai",
+      available: true,
+      status: "available"
+    }
+  }));
+
+  app.get("/api/agent-config", (c) => c.json({
+    configured: false,
+    apiKey: { hasSecret: false },
+    baseUrl: "",
+    model: "",
+    timeoutMs: 60000,
+    supportsVision: false,
+    createdAt: "",
+    updatedAt: ""
+  }));
+
+  app.get("/api/prompt-favorites", (c) => c.json({ groups: [], favorites: [] }));
+
+  app.get("/api/storage/config", (c) => c.json({
+    enabled: false,
+    provider: "cos",
+    cos: {
+      secretId: "",
+      secretKey: { hasSecret: false },
+      bucket: "",
+      region: "",
+      keyPrefix: ""
+    },
+    s3: {
+      accessKeyId: "",
+      secretAccessKey: { hasSecret: false },
+      bucket: "",
+      region: "auto",
+      keyPrefix: "",
+      endpointMode: "r2-account",
+      accountId: "",
+      endpoint: "",
+      forcePathStyle: false
+    }
+  }));
 }

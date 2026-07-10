@@ -3404,13 +3404,11 @@ function BrandName() {
 }
 
 function TopNavigation({
-  onOpenProviderConfig,
   route,
   onNavigate,
   onPreloadGallery,
   onPreloadPool
 }: {
-  onOpenProviderConfig: () => void;
   route: AppRoute;
   onNavigate: (route: AppRoute) => void;
   onPreloadGallery: () => void;
@@ -3430,20 +3428,6 @@ function TopNavigation({
         </div>
         <div className="top-navigation__actions">
           <nav aria-label={t("navMainAria")} className="top-navigation__links">
-            <a
-              aria-current={route === "home" ? "page" : undefined}
-              className="top-navigation__link"
-              data-active={route === "home"}
-              data-testid="nav-home"
-              href="/"
-              onClick={(event) => {
-                event.preventDefault();
-                onNavigate("home");
-              }}
-            >
-              <Sparkles className="size-4" aria-hidden="true" />
-              {t("navHome")}
-            </a>
             <a
               aria-current={route === "canvas" ? "page" : undefined}
               className="top-navigation__link"
@@ -3492,17 +3476,10 @@ function TopNavigation({
             </a>
           </nav>
           <LanguageSwitcher />
-          <button
-            aria-label={t("navOpenProviderConfig")}
-            className="top-navigation__settings"
-            data-testid="global-provider-settings"
-            title={t("navProviderConfig")}
-            type="button"
-            onClick={onOpenProviderConfig}
-          >
-            <Settings className="size-4" aria-hidden="true" />
-            <span>{t("navSettings")}</span>
-          </button>
+          <a className="top-navigation__settings" href="https://chickendog.cc/dashboard">
+            <ExternalLink className="size-4" aria-hidden="true" />
+            <span>ChickenDog</span>
+          </a>
         </div>
       </div>
     </header>
@@ -7127,7 +7104,6 @@ export function App() {
       <TopNavigation
         route={route}
         onNavigate={navigateToRoute}
-        onOpenProviderConfig={() => setIsProviderConfigDialogOpen(true)}
         onPreloadGallery={preloadGalleryPage}
         onPreloadPool={preloadPromptPoolPage}
       />
@@ -7244,20 +7220,6 @@ export function App() {
                 onLogoutCodex={logoutCodexSession}
                 onStartCodexLogin={startCodexLogin}
               />
-              <button
-                aria-label={t("storageSettings")}
-                className={`inline-flex h-7 w-7 items-center justify-center rounded-md border text-xs transition focus:outline-none focus:ring-2 focus:ring-cyan-100 ${
-                  storageConfig?.enabled
-                    ? "border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
-                    : "border-neutral-200 bg-white text-neutral-500 hover:bg-neutral-50 hover:text-neutral-900"
-                }`}
-                data-testid="storage-settings-button"
-                title={storageConfig?.enabled ? t("storageEnabledTitle") : t("storageSettings")}
-                type="button"
-                onClick={openStorageDialog}
-              >
-                <Cloud className="size-4" aria-hidden="true" />
-              </button>
               <div
                 className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium ${
                   saveStatus === "error" ? "bg-red-50 text-red-700" : "bg-neutral-100 text-neutral-600"
@@ -7279,36 +7241,6 @@ export function App() {
               </button>
             </div>
           </div>
-        </div>
-
-        <div
-          className="panel-tab-switcher"
-          data-active-tab={panelTab}
-          data-testid="right-panel-tab-switcher"
-          role="tablist"
-          aria-label={t("panelTabAria")}
-        >
-          <button
-            aria-selected={panelTab === "manual"}
-            className={panelTab === "manual" ? "panel-tab-switcher__button is-active" : "panel-tab-switcher__button"}
-            data-testid="panel-tab-manual"
-            role="tab"
-            type="button"
-            onClick={() => setPanelTab("manual")}
-          >
-            {t("panelTabManual")}
-          </button>
-          <button
-            aria-selected={panelTab === "agent"}
-            className={panelTab === "agent" ? "panel-tab-switcher__button is-active" : "panel-tab-switcher__button"}
-            data-testid="panel-tab-agent"
-            role="tab"
-            type="button"
-            onClick={() => setPanelTab("agent")}
-          >
-            <Bot className="size-3.5" aria-hidden="true" />
-            {t("panelTabAgent")}
-          </button>
         </div>
 
         {panelTab === "manual" ? (

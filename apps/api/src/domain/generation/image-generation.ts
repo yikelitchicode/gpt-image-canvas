@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve } from "node:path";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import sharp from "sharp";
 import type {
   AssetMetadataResponse,
@@ -34,9 +34,10 @@ import {
   type CosAssetLocation,
   type S3AssetLocation
 } from "../../infrastructure/storage/asset-storage.js";
-import { runtimePaths } from "../../infrastructure/runtime.js";
+import { getManagedRuntimePaths } from "../../infrastructure/runtime.js";
 import { assets, generationOutputs, generationRecords, generationReferenceAssets } from "../../infrastructure/schema.js";
 import { getActiveCloudStorageConfig } from "../storage/storage-config.js";
+import { requireManagedUser } from "../../server/auth-context.js";
 
 const BATCH_CONCURRENCY = 2;
 const MAX_REFERENCE_IMAGE_BYTES = 50 * 1024 * 1024;
@@ -45,6 +46,10 @@ const TRANSIENT_PROVIDER_RETRY_DELAYS_MS = [1500, 4000] as const;
 const INTERRUPTED_GENERATION_ERROR = "Generation was interrupted by an API restart. Rerun it from history.";
 const CANCELLED_GENERATION_ERROR = "This generation was cancelled.";
 const localAssetStorage = new LocalAssetStorageAdapter();
+
+function ownerId(): string {
+  return requireManagedUser().userId;
+}
 
 export interface StoredAssetFile {
   id: string;
@@ -268,7 +273,11 @@ function persistedReferenceAssetId(assetId: string | undefined): string | undefi
   }
 
   for (const candidateAssetId of persistedReferenceAssetIdCandidates(assetId)) {
-    const asset = db.select({ id: assets.id }).from(assets).where(eq(assets.id, candidateAssetId)).get();
+    const asset = db
+      .select({ id: assets.id })
+      .from(assets)
+      .where(and(eq(assets.id, candidateAssetId), eq(assets.ownerId, ownerId())))
+      .get();
     if (asset?.id) {
       return asset.id;
     }
@@ -298,14 +307,16 @@ export async function saveReferenceImageInput(input: ReferenceImageInput): Promi
   const assetId = randomUUID();
   const extension = extensionForMimeType(parsed.mimeType);
   const fileName = `${assetId}.${extension}`;
-  const relativePath = `assets/${fileName}`;
-  const filePath = resolve(runtimePaths.dataDir, relativePath);
+  const paths = getManagedRuntimePaths();
+  const relativePath = fileName;
+  const filePath = resolve(paths.assetsDir, relativePath);
   const createdAt = new Date().toISOString();
 
   await localAssetStorage.putObject({ filePath, bytes: parsed.bytes });
   db.insert(assets)
     .values({
       id: assetId,
+      ownerId: ownerId(),
       fileName,
       relativePath,
       mimeType: parsed.mimeType,
@@ -352,13 +363,14 @@ function extensionForMimeType(mimeType: string): string {
 }
 
 export function getStoredAssetFile(assetId: string): StoredAssetFile | undefined {
-  const asset = db.select().from(assets).where(eq(assets.id, assetId)).get();
+  const asset = db.select().from(assets).where(and(eq(assets.id, assetId), eq(assets.ownerId, ownerId()))).get();
   if (!asset) {
     return undefined;
   }
 
-  const filePath = resolve(runtimePaths.dataDir, asset.relativePath);
-  if (!isInsideDirectory(filePath, runtimePaths.assetsDir)) {
+  const paths = getManagedRuntimePaths();
+  const filePath = resolve(paths.assetsDir, asset.relativePath);
+  if (!isInsideDirectory(filePath, paths.assetsDir)) {
     return undefined;
   }
 
@@ -505,8 +517,9 @@ async function editSingleOutput(input: EditImageProviderInput, provider: ImagePr
 async function saveProviderImage(image: ProviderImage, input: ImageProviderInput, _signal?: AbortSignal): Promise<SavedProviderImage> {
   const assetId = randomUUID();
   const fileName = `${assetId}.${input.outputFormat === "jpeg" ? "jpg" : input.outputFormat}`;
-  const relativePath = `assets/${fileName}`;
-  const filePath = resolve(runtimePaths.dataDir, relativePath);
+  const paths = getManagedRuntimePaths();
+  const relativePath = fileName;
+  const filePath = resolve(paths.assetsDir, relativePath);
   const mimeType = mimeTypes[input.outputFormat];
   const bytes = Buffer.from(image.b64Json, "base64");
   const imageSize = await readImageSize(bytes);
@@ -567,6 +580,7 @@ function createRunningGenerationRecord(input: PersistedGenerationInput): Generat
   db.insert(generationRecords)
     .values({
       id: generationId,
+      ownerId: ownerId(),
       mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
@@ -631,7 +645,7 @@ function completeGenerationRecord(generationId: string, input: PersistedGenerati
       error: error ?? null,
       referenceAssetId: primaryReferenceAssetId ?? null
     })
-    .where(eq(generationRecords.id, generationId))
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.ownerId, ownerId())))
     .run();
 
   db.delete(generationOutputs).where(eq(generationOutputs.generationId, generationId)).run();
@@ -670,6 +684,7 @@ function saveCompletedGenerationRecord(generationId: string, input: PersistedGen
   db.insert(generationRecords)
     .values({
       id: generationId,
+      ownerId: ownerId(),
       mode: input.mode,
       prompt: input.originalPrompt,
       effectivePrompt: input.prompt,
@@ -702,8 +717,9 @@ function saveCompletedGenerationRecord(generationId: string, input: PersistedGen
       db.insert(assets)
         .values({
           id: output.asset.id,
+          ownerId: ownerId(),
           fileName: output.asset.fileName,
-          relativePath: `assets/${output.asset.fileName}`,
+          relativePath: output.asset.fileName,
           mimeType: output.asset.mimeType,
           width: output.asset.width,
           height: output.asset.height,
@@ -762,8 +778,9 @@ function insertGenerationOutputs(generationId: string, outputs: BatchOutputResul
       db.insert(assets)
         .values({
           id: output.asset.id,
+          ownerId: ownerId(),
           fileName: output.asset.fileName,
-          relativePath: `assets/${output.asset.fileName}`,
+          relativePath: output.asset.fileName,
           mimeType: output.asset.mimeType,
           width: output.asset.width,
           height: output.asset.height,
@@ -815,7 +832,7 @@ function updateGenerationRecordStatus(
       status,
       error
     })
-    .where(eq(generationRecords.id, generationId))
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.ownerId, ownerId())))
     .run();
 
   return readGenerationRecord(generationId);
@@ -826,7 +843,11 @@ function isTerminalGenerationStatus(status: GenerationStatus): boolean {
 }
 
 function readGenerationRecord(generationId: string): GenerationRecord | undefined {
-  const record = db.select().from(generationRecords).where(eq(generationRecords.id, generationId)).get();
+  const record = db
+    .select()
+    .from(generationRecords)
+    .where(and(eq(generationRecords.id, generationId), eq(generationRecords.ownerId, ownerId())))
+    .get();
   if (!record) {
     return undefined;
   }
@@ -844,7 +865,9 @@ function readGenerationRecord(generationId: string): GenerationRecord | undefine
     .all()
     .sort((left, right) => left.position - right.position);
   const assetIds = outputRows.flatMap((output) => (output.assetId ? [output.assetId] : []));
-  const assetRows = assetIds.length > 0 ? db.select().from(assets).where(inArray(assets.id, assetIds)).all() : [];
+  const assetRows = assetIds.length > 0
+    ? db.select().from(assets).where(and(inArray(assets.id, assetIds), eq(assets.ownerId, ownerId()))).all()
+    : [];
   const assetById = new Map(assetRows.map((asset) => [asset.id, asset]));
   const referenceAssetIds = referenceRows.map((referenceRow) => referenceRow.assetId);
 

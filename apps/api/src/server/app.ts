@@ -4,20 +4,13 @@ import { Hono } from "hono";
 import { WebSocketServer } from "ws";
 import { runtimePaths } from "../infrastructure/runtime.js";
 import { errorResponse } from "./http/errors.js";
-import { registerAgentConfigRoutes } from "./routes/agent-config.js";
-import { registerAgentConversationRoutes } from "./routes/agent-conversations.js";
-import { registerAgentSkillRoutes } from "./routes/agent-skills.js";
-import { registerAgentWebSocketRoutes } from "./routes/agent-ws.js";
 import { registerAssetRoutes } from "./routes/assets.js";
-import { registerAuthRoutes } from "./routes/auth.js";
 import { registerCoreRoutes } from "./routes/core.js";
 import { registerGalleryRoutes } from "./routes/gallery.js";
 import { registerImageRoutes } from "./routes/images.js";
 import { registerProjectRoutes } from "./routes/project.js";
-import { registerPromptFavoriteRoutes } from "./routes/prompt-favorites.js";
 import { registerPromptPoolRoutes } from "./routes/prompt-pool.js";
-import { registerProviderConfigRoutes } from "./routes/provider-config.js";
-import { registerStorageRoutes } from "./routes/storage.js";
+import { managedAuthMiddleware, managedPageAuthMiddleware, registerManagedAuthRoutes } from "./managed-auth.js";
 
 export const agentWebSocketServer = new WebSocketServer({ noServer: true });
 export const app = createApp();
@@ -30,24 +23,25 @@ export function createApp(): Hono {
     return c.json(errorResponse("internal_error", "Internal server error."), 500);
   });
 
+  registerManagedAuthRoutes(app);
+  app.use("/api/*", managedAuthMiddleware);
   registerCoreRoutes(app);
-  registerAuthRoutes(app);
-  registerProviderConfigRoutes(app);
-  registerAgentConfigRoutes(app);
-  registerAgentConversationRoutes(app);
-  registerAgentSkillRoutes(app);
+  // Managed deployment deliberately excludes user-supplied providers, Codex,
+  // Agent configuration, skills, and cloud credentials.
   registerProjectRoutes(app);
   registerGalleryRoutes(app);
   registerPromptPoolRoutes(app);
-  registerPromptFavoriteRoutes(app);
-  registerStorageRoutes(app);
   registerAssetRoutes(app);
   registerImageRoutes(app);
-  registerAgentWebSocketRoutes(app);
 
   const webDistRoot = relative(process.cwd(), runtimePaths.webDistDir) || ".";
 
   app.get("/api/*", (c) => c.json(errorResponse("not_found", "Not found."), 404));
+
+  app.use("/", managedPageAuthMiddleware);
+  app.use("/canvas", managedPageAuthMiddleware);
+  app.use("/gallery", managedPageAuthMiddleware);
+  app.use("/pool", managedPageAuthMiddleware);
 
   app.get("*", serveStatic({ root: webDistRoot }));
   app.get(
